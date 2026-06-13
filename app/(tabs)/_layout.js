@@ -1,9 +1,25 @@
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Tabs, useRouter } from 'expo-router';
+import { useEffect, useState } from 'react';
 import { Platform, StyleSheet, View } from 'react-native';
 
 export default function TabLayout() {
   const router = useRouter();
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+
+  useEffect(() => {
+    checkLoginStatus();
+  }, []);
+
+  const checkLoginStatus = async () => {
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      setIsLoggedIn(!!token); // 토큰이 존재하면 true, 없으면 false
+    } catch (e) {
+      console.error("탭 레이아웃 토큰 확인 에러:", e);
+    }
+  };
 
   return (
     <Tabs
@@ -25,7 +41,7 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="study"
+        name="feedback"
         options={{
           tabBarIcon: ({ focused }) => (
             <View style={styles.iconBox}>
@@ -56,20 +72,33 @@ export default function TabLayout() {
       />
       
       {/* [수정] profile 탭 설정 */}
+      {/* profile 탭 설정 */}
       <Tabs.Screen
         name="profile"
         listeners={{
-          tabPress: (e) => {
-            // [수정] profile 페이지로 이동하는 기본 동작을 막고 로그인 페이지로 이동시킴
-            e.preventDefault();
-            router.push('/login'); // replace보다 push를 권장 (뒤로가기 가능)
+          tabPress: async (e) => {
+            // 💡 탭을 누르는 순간 로컬 스토리지에서 최신 토큰 상태를 읽어옵니다.
+            const token = await AsyncStorage.getItem('userToken');
+            
+            if (!token) {
+              // 1. 토큰이 없다면 원래의 프로필 화면 이동을 막고 로그인 페이지로 보냅니다.
+              e.preventDefault();
+              router.push('/login');
+            }
+            // 2. 토큰이 있다면 e.preventDefault()가 실행되지 않아서 
+            // 원래 목적지인 'profile' 화면으로 자연스럽게 진입하게 됩니다!
           },
         }}
         options={{
           tabBarIcon: ({ focused }) => (
             <View style={styles.iconBox}>
-              <Ionicons name={focused ? "person" : "person-outline"} size={28} color={focused ? "#3b82f6" : "#222"} />
-              {/* [수정] 로그인 창으로 바로 이동하므로 여기서는 파란 점(blueDot)이 필요 없음 */}
+              <Ionicons 
+                name={focused ? "person" : "person-outline"} 
+                size={28} 
+                color={focused ? "#3b82f6" : "#222"} 
+              />
+              {/* 💡 로그인이 되어 프로필 화면에 성공적으로 들어왔을 때만 하단 파란 점을 띄워줍니다. */}
+              {focused && <View style={styles.blueDot} />}
             </View>
           ),
         }}

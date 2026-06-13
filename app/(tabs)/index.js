@@ -1,14 +1,16 @@
 import { AntDesign, FontAwesome5, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { Link } from 'expo-router'; // 화면 이동을 위해 추가
+import { Link, useRouter } from 'expo-router'; // 💡 화면 이동을 위해 useRouter 추가
 import { SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Circle, Svg } from 'react-native-svg';
 
 export default function HomeScreen() {
+  const router = useRouter(); // 👈 피드백 화면 push 이동을 위한 라우터 선언
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
         
-        {/* 1. 상단 헤더 (아바타 누르면 로그인으로 가게 Link 연결!) */}
+        {/* 1. 상단 헤더 (아바타 누르면 로그인으로 이동) */}
         <View style={styles.header}>
           <Link href="/login" asChild>
             <TouchableOpacity style={styles.avatar} />
@@ -63,7 +65,24 @@ export default function HomeScreen() {
           <AntDesign name="arrowright" size={20} color="#fff" />
         </TouchableOpacity>
 
-        {/* 4. 하단 리스트: Continue Studying (수진 님이 주신 코드 적용!) */}
+        {/* 3.5 AI 학습 피드백 리포트 진입 카드 */}
+        <TouchableOpacity 
+          style={styles.feedbackShortcutCard}
+          onPress={() => router.push('/(tabs)/feedback')} // 👈 경로를 탭 폴더 내부로 정확히 지정!
+>
+          <View style={styles.cardLeft}>
+            <View style={styles.iconBadge}>
+              <Ionicons name="analytics" size={22} color="#3B82F6" />
+            </View>
+            <View style={styles.shortcutTextWrapper}>
+              <Text style={styles.cardMainTextLink}>AI 학습 피드백 리포트</Text>
+              <Text style={styles.cardSubTextLink}>그동안의 성장을 한눈에 확인해보세요</Text>
+            </View>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
+        </TouchableOpacity>
+
+        {/* 4. 하단 리스트: Continue Studying */}
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Continue Studying</Text>
           <TouchableOpacity><Text style={styles.seeAll}>See all</Text></TouchableOpacity>
@@ -98,7 +117,7 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F3F4F6' },
-  scrollContainer: { paddingBottom: 120 },
+  scrollContainer: { paddingBottom: 120 }, // 하단 여백 통합 정리 완료
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 10, marginBottom: 20 },
   avatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#FED7AA' },
   statBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#E2E8F0', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },
@@ -117,6 +136,31 @@ const styles = StyleSheet.create({
   challengeButton: { backgroundColor: '#8B5CF6', marginHorizontal: 20, borderRadius: 15, padding: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 },
   challengeButtonContent: { flexDirection: 'row', alignItems: 'center' },
   challengeButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold', marginLeft: 10 },
+  
+  // 🆕 피드백 이동 카드 스타일 컴포넌트 추가
+  feedbackShortcutCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#fff',
+    padding: 16,
+    borderRadius: 15,
+    marginHorizontal: 20,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+  },
+  cardLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  iconBadge: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#EBF5FF', justifyContent: 'center', alignItems: 'center' },
+  shortcutTextWrapper: { justifyContent: 'center' },
+  cardMainTextLink: { fontSize: 16, fontWeight: 'bold', color: '#1F2937', marginBottom: 2 },
+  cardSubTextLink: { fontSize: 12, color: '#6B7280' },
+
   // 리스트 스타일
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, marginTop: 10, marginBottom: 15 },
   sectionTitle: { fontSize: 20, fontWeight: 'bold', color: '#1F2937' },
@@ -126,8 +170,4 @@ const styles = StyleSheet.create({
   studyText: { flex: 1 },
   studyTitle: { fontSize: 16, fontWeight: 'bold', color: '#1F2937' },
   studySub: { fontSize: 13, color: '#9CA3AF', marginTop: 2 },
-  // app/(tabs)/index.js 파일 하단
-scrollContainer: {
-  paddingBottom: 120, // 이 값을 120 정도로 넉넉히 주면 리스트 끝까지 시원하게 보입니다!
-},
 });
