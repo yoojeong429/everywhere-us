@@ -19,7 +19,7 @@ export default function CameraScreen() {
   const scrollViewRef = useRef(null);
   const [permission, requestPermission] = useCameraPermissions();
 
-  const [step, setStep] = useState('SCANNING'); // SCANNING, CONFIRMING, OBJECT_SCANNING, SELECT_OBJECT, COMBINATIONS_LIST, DIALOGUE_CHAT, SPACE_DIALOGUE_CHAT
+  const [step, setStep] = useState('SCANNING'); 
   const [currentSpace, setCurrentSpace] = useState('분석 전'); 
   const [scannedObject, setScannedObject] = useState('사물을 찾는 중...'); 
   const [detectedCandidates, setDetectedCandidates] = useState([]); 
@@ -30,7 +30,6 @@ export default function CameraScreen() {
   const [aiStatus, setAiStatus] = useState('IDLE');
   const [scanCount, setScanCount] = useState(0);
 
-  // [CLIP 연동] 6장의 이미지를 백엔드 공간 인식 API로 전송
   const uploadSingleSpaceImage = async (photoUri) => {
     const formData = new FormData();
     formData.append('file', {
@@ -59,7 +58,6 @@ export default function CameraScreen() {
     }
   };
 
-  // [YOLO 연동] 단일 사물 촬영 및 인식
   const uploadObjectScanImage = async (photoUri) => {
     const formData = new FormData();
     const uri = Platform.OS === 'ios' ? photoUri.replace('file://', '') : photoUri;
@@ -90,7 +88,6 @@ export default function CameraScreen() {
         return [];
     }
     
-    // 아까 확인한 구조에 맞게 데이터 추출
     return data;
 
   } catch (err) {
@@ -106,10 +103,8 @@ const handleSingleSpaceScan = async () => {
   
   setIsLocked(true);
   try {
-    // 사진 1장 촬영
     const photo = await cameraRef.current.takePictureAsync({ quality: 0.5 });
     
-    // 백엔드로 전송 (uploadSingleSpaceImage 함수 호출)
     const spaceName = await uploadSingleSpaceImage(photo.uri);
     
     if (spaceName) {
@@ -125,10 +120,6 @@ const handleSingleSpaceScan = async () => {
   }
 };
 
-// 3. 렌더링 부분의 버튼을 아래처럼 연결하세요.
-
-
-  // 사물 전용 촬영 (YOLO 인터랙션)
   const takePicture = async () => {
     if (!cameraRef.current || isLocked) return;
 
@@ -142,17 +133,15 @@ const handleSingleSpaceScan = async () => {
       if (detectedResult && detectedResult.object) {
       setScannedObject(detectedResult.object);
 
-      // 3. 서버에서 받은 expressions를 화면용 리스트로 변환
       const formattedCombinations = detectedResult.ai.expressions.map((exp, index) => ({
         id: `server_${index}`,
         phrase: exp.split('(')[0].trim().replace(/"/g, ''),
         meaning: exp.split('(')[1]?.replace(')', '') || '',
-        dialogue: [] // 필요 시 서버에서 다이얼로그도 받아와서 여기에 할당
+        dialogue: [] 
       }));
       setDetectedCandidates(formattedCombinations);
       setStep('COMBINATIONS_LIST');
     } else {
-      // 5. 인식 실패 시 처리
       alert(`학습 가능한 사물을 찾지 못했습니다.\n서버 응답: ${JSON.stringify(detectedResult)}`);
       cameraRef.current.resumePreview();
       setIsLocked(false);
@@ -230,7 +219,6 @@ const handleSingleSpaceScan = async () => {
             </TouchableOpacity>
           </View>
 
-{/* 스캔 관련 UI: 한 장 촬영 모드 */}
 {step === 'SCANNING' && (
   <View style={styles.scanBanner}>
     <Text style={styles.scanText}>공간을 중앙에 맞추고 촬영하세요!</Text>
@@ -245,7 +233,6 @@ const handleSingleSpaceScan = async () => {
       </Text>
     </TouchableOpacity>
 
-    {/* 분석 중일 때만 표시되는 인디케이터 */}
     {isLocked && (
       <View style={{ marginTop: 20 }}>
         <ActivityIndicator size="large" color="#3b82f6" />
@@ -255,7 +242,6 @@ const handleSingleSpaceScan = async () => {
   </View>
 )}
 
-          {/* 2. 공간 분석 완료 -> 사용자가 확인하는 UI 단계 */}
           {step === 'CONFIRMING' && (
             <View style={styles.confirmBox}>
               <Ionicons name="location-sharp" size={36} color="#3b82f6" style={{ marginBottom: 5 }} />
@@ -274,7 +260,6 @@ const handleSingleSpaceScan = async () => {
                 
               <TouchableOpacity style={styles.spaceSkipBtn} onPress={() => {
                 setStep('SPACE_DIALOGUE_CHAT');
-  // 여기를 []로 변경하세요!
                  startDialogueSession([]); 
 }}>
                   <Text style={styles.btnTextBlue}>장소 전용 "공간 대화" 시작하기</Text>
@@ -287,7 +272,6 @@ const handleSingleSpaceScan = async () => {
             </View>
           )}
 
-          {/* 3. 사물 스캔 대기 (YOLO 스캔 뷰) */}
           {step === 'OBJECT_SCANNING' && (
             <View style={styles.objectContainer}>
               <View style={styles.scannerBox}>
@@ -303,7 +287,6 @@ const handleSingleSpaceScan = async () => {
             </View>
           )}
 
-          {/* 하단 셔터 바 */}
           {(step === 'SCANNING' || step === 'CONFIRMING' || step === 'OBJECT_SCANNING') && (
             <View style={styles.bottomControls}>
               <View style={styles.circleBtn}><Text style={{ color: 'white' }}>1x</Text></View>
@@ -316,7 +299,6 @@ const handleSingleSpaceScan = async () => {
             </View>
           )}
 
-          {/* 4. 사물 복수 후보군 선택 창 */}
           {step === 'SELECT_OBJECT' && (
             <View style={styles.sheetContainer}>
               <Text style={styles.chatTitle}>🔎 공부할 사물 선택</Text>
@@ -338,7 +320,6 @@ const handleSingleSpaceScan = async () => {
             </View>
           )}
 
-          {/* 5. 표현 구문 리스트 */}
           {step === 'COMBINATIONS_LIST' && (
           <View style={styles.sheetContainer}>
             <TouchableOpacity style={styles.sheetCloseBtn} onPress={() => { 
@@ -367,7 +348,6 @@ const handleSingleSpaceScan = async () => {
   </View>
 )}
 
-          {/* 6. 사물 연계 대화 시뮬레이터 */}
           {step === 'DIALOGUE_CHAT' && selectedCombo && (
             <View style={styles.sheetContainer}>
               <View style={styles.sheetHeader}>
@@ -407,7 +387,6 @@ const handleSingleSpaceScan = async () => {
             </View>
           )}
 
-          {/* 7. 공간 자유 토킹 룸 */}
           {step === 'SPACE_DIALOGUE_CHAT' && (
             <View style={styles.sheetContainer}>
               <View style={styles.sheetHeader}>
@@ -437,7 +416,7 @@ const handleSingleSpaceScan = async () => {
                 {nextUserStatement ? (
               <TouchableOpacity 
                 style={[styles.micButton, { backgroundColor: '#10b981' }]} 
-                onPress={() => handleUserSpeak(nextUserStatement, [])}> // 빈 배열로 완전히 교체
+                onPress={() => handleUserSpeak(nextUserStatement, [])}> 
                  <Ionicons name="mic" size={22} color="white" />
                     <Text style={styles.micButtonText}>대사 따라 말하기</Text>
                   </TouchableOpacity>
