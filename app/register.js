@@ -21,7 +21,6 @@ export default function RegisterScreen() {
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [confirmPasswordVisible, setConfirmPasswordVisible] = useState(false);
   
-  // Username으로 변경된 상태 관리
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -29,19 +28,16 @@ export default function RegisterScreen() {
   const [isLoading, setIsLoading] = useState(false);
 
 const handleRegister = async () => {
-    // 1. 유효성 검사 (입력값 확인)
     if (!username || !password || !confirmPassword) {
       Alert.alert("알림", "모든 필드를 입력해주세요.");
       return;
     }
 
-    // 2. 비밀번호 일치 확인
     if (password !== confirmPassword) {
       Alert.alert("알림", "비밀번호가 서로 일치하지 않습니다.");
       return;
     }
 
-    // 3. 최소 길이 제한 (UX 개선)
     if (username.length < 4) {
       Alert.alert("알림", "아이디는 4자 이상 입력해주세요.");
       return;
@@ -58,12 +54,9 @@ const handleRegister = async () => {
 
       const result = await response.json();
       
-      // 💡 디버깅용: 서버가 정말로 성공했는지 확인
       console.log("서버 응답 상태:", response.status);
       console.log("서버 응답 데이터:", result);
 
-      // 1. response.ok(200번대)인 경우만 성공으로 간주
-      // 2. 만약 백엔드가 200을 보내는데도 메시지에 "이미 존재하는"이라는 단어가 포함되어 있다면 실패로 간주
       const isDuplicate = result.message?.includes("이미 존재하는") || result.msg?.includes("이미 존재하는");
 
       if (response.ok && !isDuplicate) {
@@ -71,11 +64,9 @@ const handleRegister = async () => {
           { text: "확인", onPress: () => router.back() }
         ]);
       } else {
-        // 서버에서 보낸 메시지(result.msg 등)가 여기에 출력됩니다.
         Alert.alert("회원가입 실패", result.message || result.msg || "가입에 실패했습니다.");
       }
     } catch (error) {
-      // ⚠️ 네트워크 문제 등으로 통신 자체가 안 될 때
       console.error("통신 에러:", error);
       Alert.alert("오류", "서버와 연결할 수 없습니다.");
     } finally {
@@ -99,7 +90,6 @@ const handleRegister = async () => {
           <Text style={styles.subTitle}>Create an account to save your learning data</Text>
         </View>
 
-        {/* Username 입력 필드 */}
         <View style={styles.inputWrapper}>
           <Text style={styles.inputLabel}>Username</Text>
           <View style={styles.inputContainer}>
@@ -115,7 +105,6 @@ const handleRegister = async () => {
           </View>
         </View>
 
-        {/* Password 입력 필드 */}
         <View style={styles.inputWrapper}>
           <Text style={styles.inputLabel}>Password</Text>
           <View style={[styles.inputContainer, styles.passwordRow]}>
@@ -135,7 +124,6 @@ const handleRegister = async () => {
           </View>
         </View>
 
-        {/* Confirm Password 입력 필드 */}
         <View style={styles.inputWrapper}>
           <Text style={styles.inputLabel}>Confirm Password</Text>
           <View style={[styles.inputContainer, styles.passwordRow]}>
