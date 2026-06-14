@@ -14,20 +14,17 @@ import {
   View,
 } from 'react-native';
 
-// 서버 주소
 const BACKEND_API_URL = 'https://cobalt-unretired-fastness.ngrok-free.dev';
 
 export default function LoginScreen() {
   const router = useRouter();
   const [passwordVisible, setPasswordVisible] = useState(false);
   
-  // 💡 상태 변수명도 username으로 변경
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
   const handleLogin = async () => {
-    // 💡 유효성 검사 변수도 username으로 변경
     if (!username || !password) {
       Alert.alert("알림", "아이디와 비밀번호를 입력해주세요.");
       return;
@@ -45,7 +42,7 @@ export default function LoginScreen() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          username: username, // 💡 오타 수정: usernme -> username
+          username: username, 
           password: password,
         }),
         signal: controller.signal
@@ -110,7 +107,6 @@ export default function LoginScreen() {
           <Text style={styles.subTitle}>Sign in to continue your contextual learning</Text>
         </View>
 
-        {/* 💡 Username 입력 섹션 */}
         <View style={styles.inputWrapper}>
           <Text style={styles.inputLabel}>Username</Text>
           <View style={styles.inputContainer}>
@@ -195,8 +191,6 @@ export default function LoginScreen() {
     </SafeAreaView>
   );
 }
-
-// ... styles는 이전과 동일합니다.
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
