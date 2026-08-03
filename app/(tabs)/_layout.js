@@ -3,7 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Tabs, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Platform, StyleSheet, View } from 'react-native';
-
+  
 export default function TabLayout() {
   const router = useRouter();
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -29,6 +29,7 @@ export default function TabLayout() {
         tabBarStyle: styles.tabContainer,
       }}
     >
+      {/* 1. 홈 (app/(tabs)/index.js) */}
       <Tabs.Screen
         name="index"
         options={{
@@ -40,28 +41,25 @@ export default function TabLayout() {
           ),
         }}
       />
+
+      {/* 2. 피드백 (app/(tabs)/feedback.js) */}
       <Tabs.Screen
         name="feedback"
         options={{
           tabBarIcon: ({ focused }) => (
             <View style={styles.iconBox}>
-              <Ionicons name={focused ? "book" : "book-outline"} size={26} color={focused ? "#3b82f6" : "#222"} />
+              <Ionicons name={focused ? "chatbox-ellipses" : "chatbox-ellipses-outline"} size={26} color={focused ? "#3b82f6" : "#222"} />
               {focused && <View style={styles.blueDot} />}
             </View>
           ),
         }}
-
       />
-     {}
+
+      {/* 3. 카메라 (app/(tabs)/camera.js) */}
       <Tabs.Screen
-        name="camera" 
-        listeners={{
-          tabPress: (e) => {
-            e.preventDefault(); 
-            router.push('/camera_full'); 
-          },
-        }}
+        name="camera"
         options={{
+          tabBarStyle: { display: 'none' }, // 👈 카메라 화면에서 하단 탭바 완전 숨김!
           tabBarIcon: ({ focused }) => (
             <View style={styles.iconBox}>
               <Ionicons name={focused ? "camera" : "camera-outline"} size={28} color={focused ? "#3b82f6" : "#222"} />
@@ -71,8 +69,8 @@ export default function TabLayout() {
         }}
       />
       
-    {}
-      {}
+      {/* 4. 프로필 (app/(tabs)/profile.js) */}
+      {/* 4. 프로필 탭 */}
       <Tabs.Screen
         name="profile"
         listeners={{
@@ -121,10 +119,11 @@ const styles = StyleSheet.create({
     shadowRadius: 15,
     borderTopWidth: 0,
     paddingBottom: 0, 
+    zIndex: 100,
   },
-  iconBox: {
+ iconBox: {
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'center', // 👈 justify.content -> justifyContent 로 수정!
     marginTop: Platform.OS === 'ios' ? 15 : 0, 
     height: '100%',
   },
