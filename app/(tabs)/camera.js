@@ -1,342 +1,783 @@
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { router } from 'expo-router';
-import { useRef, useState } from 'react';
+import * as Speech from 'expo-speech';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   Dimensions,
+  Easing,
+  ImageBackground,
   Platform,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
-  View,
+  View
 } from 'react-native';
 
 const { width, height } = Dimensions.get('window');
-// 백엔드(FastAPI) Base URL
 const BASE_URL = 'https://cobalt-unretired-fastness.ngrok-free.dev';
 
-export default function CameraScreen() {
+// 백엔드가 꺼져있을 때는 true
+const USE_MOCK = false;
+
+const DUMMY_TOPICS = [
+  'Ordering a coffee',
+  'Asking about the menu',
+  'Talking about your favorite drink',
+  'Paying for your order',
+];
+
+// 파동 개수 (12개)
+const WAVE_BAR_COUNT = 12;
+
+export default function CameraScreen({ onSaveToFeedback }) {
   const userId = 1;
   const cameraRef = useRef(null);
   const scrollViewRef = useRef(null);
   const [permission, requestPermission] = useCameraPermissions();
 
-  const [step, setStep] = useState('SCANNING');
-  const [currentSpace, setCurrentSpace] = useState('분석 전');
-  const [scannedObject, setScannedObject] = useState('사물을 찾는 중...');
-  const [detectedCandidates, setDetectedCandidates] = useState([]);
-  const [isLocked, setIsLocked] = useState(false);
-  const [selectedCombo, setSelectedCombo] = useState(null);
-  const [activeDialogue, setActiveDialogue] = useState([]);
-  const [currentTurn, setCurrentTurn] = useState(0);
-  const [aiStatus, setAiStatus] = useState('IDLE');
-  const [scanCount, setScanCount] = useState(0);
+  // 화면 단계: 'CAMERA' | 'ANALYZING' | 'MAIN_LEARNING' | 'CHAT'
+  const [step, setStep] = useState('CAMERA');
+const [capturedPhotoUri, setCapturedPhotoUri] = useState(null);
+
+// 4방향 촬영
+const [capturedPhotos, setCapturedPhotos] = useState({
+  front: null,
+  right: null,
+  back: null,
+  left: null,
+});
+
+// 현재 촬영할 방향
+const [captureDirection, setCaptureDirection] = useState('front');
+
+// 4장 촬영이 끝났는지
+const CAPTURE_DIRECTIONS = [
+  { key: 'front', label: '앞쪽', instruction: '앞쪽 공간을 촬영해주세요' },
+  { key: 'right', label: '오른쪽', instruction: '오른쪽 공간을 촬영해주세요' },
+  { key: 'back', label: '뒤쪽', instruction: '뒤쪽 공간을 촬영해주세요' },
+  { key: 'left', label: '왼쪽', instruction: '왼쪽 공간을 촬영해주세요' },
+];
+  // 인식 및 상태 관리
+const [currentSpace, setCurrentSpace] = useState('');
+  const [detectedObjects, setDetectedObjects] = useState([]);
+  const [selectedObject, setSelectedObject] = useState(null);
+  const [recommendedTopics, setRecommendedTopics] = useState([]);
+
+  // UI 모달 및 피드백 버튼 노출 상태
+  const [isTopicDrawerOpen, setIsTopicDrawerOpen] = useState(false);
+  const [showFeedbackBtn, setShowFeedbackBtn] = useState(false);
+  const [showRecommendedTopics, setShowRecommendedTopics] = useState(false);
+
+  // 대화 및 AI 상태
   const [sessionId, setSessionId] = useState(null);
+  const [activeDialogue, setActiveDialogue] = useState([]);
+  const [aiStatus, setAiStatus] = useState('IDLE');
+  const [currentTopic, setCurrentTopic] = useState('');
+  
+  // 🎙️ 음성 녹음/인식 상태: 'IDLE' | 'RECORDING' | 'PROCESSING'
+  const [recordingState, setRecordingState] = useState('IDLE');
 
-  // 1. 공간 탐지 API
-  const uploadSingleSpaceImage = async (photoUri) => {
-    const formData = new FormData();
-    formData.append('file', {
-      uri: photoUri,
-      name: 'space_scan.jpg',
-      type: 'image/jpeg',
-    });
-    formData.append('user_id', String(userId));
+  // 🌊 음성 파동 애니메이션
+  const waveAnimValues = useRef(
+    Array.from({ length: WAVE_BAR_COUNT }, () => new Animated.Value(6))
+  ).current;
 
-    try {
-      const response = await fetch(`${BASE_URL}/detect-space`, {
-        method: 'POST',
-        body: formData,
-        headers: { 'ngrok-skip-browser-warning': 'true' },
+  // 패러프레이징 토글 상태
+  const [showParaphraseMap, setShowParaphraseMap] = useState({});
+
+  // 예: 주제를 선택하거나 대화 화면으로 전환되는 함수
+const startChat = (topic) => {
+  setCurrentTopic(topic);
+  
+  // 타이머
+  setTimeLeft(10); 
+  setShowFeedbackBtn(false);
+  
+  setStep('CHAT'); // 화면을 CHAT 단계로 전환 (이제 useEffect 타이머 동작!)
+};
+
+  //타이머
+const [timeLeft, setTimeLeft] = useState(10);
+
+useEffect(() => {
+  let timer;
+
+  // step이 'CHAT'일 때만 타이머 동작
+  if (step === 'CHAT') {
+    if (timeLeft > 0) {
+      timer = setInterval(() => {
+        setTimeLeft((prev) => prev - 1);
+      }, 1000);
+    } else if (timeLeft === 0) {
+      // 60초가 모두 끝나면 피드백 버튼 노출
+      setShowFeedbackBtn(true);
+    }
+  }
+
+  return () => clearInterval(timer);
+}, [step, timeLeft]);
+
+  // 🌊 흘러가는 음성 파동 애니메이션
+  useEffect(() => {
+    let animations = [];
+
+    if (recordingState === 'RECORDING') {
+      animations = waveAnimValues.map((anim, index) => {
+        const baseMin = 8;
+        const baseMax = 28 + (index % 3) * 4;
+
+        return Animated.loop(
+          Animated.sequence([
+            Animated.timing(anim, {
+              toValue: baseMax,
+              duration: 250 + (index % 4) * 50,
+              easing: Easing.inOut(Easing.sin),
+              useNativeDriver: false,
+            }),
+            Animated.timing(anim, {
+              toValue: baseMin,
+              duration: 250 + (index % 4) * 50,
+              easing: Easing.inOut(Easing.sin),
+              useNativeDriver: false,
+            }),
+          ])
+        );
       });
 
-      if (!response.ok) throw new Error(`서버 오류: ${response.status}`);
-
-      const data = await response.json();
-      console.log('🎯 백엔드 CLIP 최종 판정 장소:', data);
-      return data.space;
-    } catch (err) {
-      console.error('CLIP 공간 인식 통신 실패:', err);
-      return null;
+      animations.forEach((anim) => anim.start());
+    } else {
+      waveAnimValues.forEach((anim) => {
+        Animated.timing(anim, {
+          toValue: 6,
+          duration: 300,
+          useNativeDriver: false,
+        }).start();
+      });
     }
+
+    return () => {
+      animations.forEach((anim) => anim.stop());
+    };
+  }, [recordingState]);
+
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   };
 
-  // 2. 사물 탐지 API
-  const uploadObjectScanImage = async (photoUri) => {
+  // 1. 이미지 통합 분석
+const processImageAnalysis = async (photoUri) => {
+  setStep('ANALYZING');
+
+  const formattedUri =
+    Platform.OS === 'ios'
+      ? photoUri.replace('file://', '')
+      : photoUri;
+
+  try {
+    // ==========================================
+    // /detect-space 하나로 공간 + 사물 + 좌표 받기
+    // ==========================================
     const formData = new FormData();
-    const uri = Platform.OS === 'ios' ? photoUri.replace('file://', '') : photoUri;
+
     formData.append('file', {
-      uri: uri,
+      uri: formattedUri,
       name: 'photo.jpg',
       type: 'image/jpeg',
     });
-    formData.append('current_space', currentSpace);
 
-    try {
-      const response = await fetch(`${BASE_URL}/detect`, {
-        method: 'POST',
-        body: formData,
-        headers: { 'ngrok-skip-browser-warning': 'true' },
-      });
-      const responseText = await response.text();
-      console.log('🔥 서버 응답 원본:', responseText);
+    formData.append('user_id', String(userId));
 
-      if (!response.ok) {
-        console.error(`서버 응답 에러 (${response.status}):`, responseText);
-        return null;
-      }
-
-      const data = JSON.parse(responseText);
-      if (!data) {
-        console.warn('⚠️ 서버 응답이 비어있습니다 (null)');
-        return [];
-      }
-
-      return data;
-    } catch (err) {
-      console.error('통신 에러:', err);
-      return null;
-    }
-  };
-
-  // 3. 백엔드 대화 시작 API (/conversation/start)
- const startConversationAPI = async (targetExpression) => {
-  setAiStatus('THINKING');
-  setActiveDialogue([]);
-
-  try {
-    const response = await fetch(`${BASE_URL}/conversation/start`, {
+    const response = await fetch(`${BASE_URL}/detect-space`, {
       method: 'POST',
+      body: formData,
       headers: {
-        'Content-Type': 'application/json',
         'ngrok-skip-browser-warning': 'true',
       },
-      body: JSON.stringify({
-        target_expression: targetExpression,
-      }),
     });
 
+    if (!response.ok) {
+      throw new Error(`이미지 분석 실패: ${response.status}`);
+    }
 
     const data = await response.json();
 
-    console.log('대화 시작 AI 응답:', data);
+    console.log('📦 detect-space 전체 응답:', JSON.stringify(data, null, 2));
 
+    // ==========================================
+    // 1. 공간 정보
+    // ==========================================
+    const detectedSpace =
+      data?.space ||
+      data?.place ||
+      data?.detected_space ||
+      '공간';
 
-    if (data.success) {
+    setCurrentSpace(detectedSpace);
 
-      setSessionId(data.session_id);
+    // ==========================================
+    // 2. 사물 + Bounding Box
+    // ==========================================
+    if (Array.isArray(data?.objects)) {
+    const YOLO_WIDTH = 990;
+    const YOLO_HEIGHT = 1920;
 
-
-      if (data.reply) {
-        setActiveDialogue([
-          {
-            speaker:'AI',
-            text:data.reply,
+      const mappedObjects = data.objects
+        .map((obj, index) => {
+          // box가 없는 객체는 제외
+          if (
+            !obj?.box ||
+            typeof obj.box.x1 !== 'number' ||
+            typeof obj.box.y1 !== 'number' ||
+            typeof obj.box.x2 !== 'number' ||
+            typeof obj.box.y2 !== 'number'
+          ) {
+            console.warn(
+              '⚠️ Bounding box가 없는 객체:',
+              obj
+            );
+            return null;
           }
-        ]);
-      } else {
 
-        setActiveDialogue([
-          {
-            speaker:'AI',
-            text:'대화를 시작할 준비가 완료되었습니다.',
-          }
-        ]);
+          const { x1, y1, x2, y2 } = obj.box;
 
-      }
+          // Bounding Box 중앙 좌표
+          const centerX = (x1 + x2) / 2;
+          const centerY = (y1 + y2) / 2;
 
+          // YOLO 좌표 → 현재 화면 좌표
+          const screenX =
+            (centerX / YOLO_WIDTH) * width;
 
+          const screenY =
+            (centerY / YOLO_HEIGHT) * height;
+
+          console.log(
+            `📍 ${obj.name}:`,
+            `YOLO(${centerX}, ${centerY})`,
+            `→ 화면(${screenX}, ${screenY})`
+          );
+
+          return {
+            id: obj.id || `obj_${index}`,
+            name: obj.name || obj.label || 'Object',
+            confidence: obj.confidence || 0,
+
+            // 화면에 표시할 위치
+            x: screenX,
+            y: screenY,
+
+            // 원본 좌표도 보관
+            box: obj.box,
+          };
+        })
+        .filter(Boolean);
+
+      console.log(
+        '📍 최종 화면 객체:',
+        JSON.stringify(mappedObjects, null, 2)
+      );
+
+      setDetectedObjects(mappedObjects);
     } else {
-
-      setActiveDialogue([
-        {
-          speaker:'AI',
-          text:data.message || 'AI 응답을 가져오지 못했습니다.',
-        }
-      ]);
-
+      console.warn('⚠️ objects가 없습니다.');
+      setDetectedObjects([]);
     }
 
+    // ==========================================
+    // 3. 추천 표현 / 추천 주제
+    // ==========================================
+    const topics =
+      data?.ai?.expressions ||
+      data?.expressions ||
+      data?.recommended_topics ||
+      [];
 
-  } catch(error){
-
-    console.error(
-      '대화 시작 통신 오류:',
-      error
+    setRecommendedTopics(
+      Array.isArray(topics) && topics.length > 0
+        ? topics
+        : DUMMY_TOPICS
     );
 
+    // ==========================================
+    // 학습 화면으로 이동
+    // ==========================================
+    setStep('MAIN_LEARNING');
 
-    setActiveDialogue([
-      {
-        speaker:'AI',
-        text:'서버 연결 중 오류가 발생했습니다.',
-      }
-    ]);
+  } catch (err) {
+    console.error('이미지 분석 통신 에러:', err);
 
+    alert('공간 및 사물 인식 중 오류가 발생했습니다.');
 
-  } finally {
-
-    setAiStatus('IDLE');
-
-
-    setTimeout(()=>{
-      scrollViewRef.current?.scrollToEnd({
-        animated:true
-      });
-    },100);
-
+    setStep('CAMERA');
   }
 };
 
-  // 4. 메시지 전송 API (/conversation/message)
-  const sendUserMessageToBackend = async (userText) => {
-    if (!sessionId) return null;
+// ==========================================
+// 4방향 촬영 버튼
+// ==========================================
+const handleTakePicture = async () => {
+  if (!cameraRef.current) {
+    console.warn('⚠️ 카메라가 준비되지 않았습니다.');
+    return;
+  }
 
-    try {
-      const response = await fetch(`${BASE_URL}/conversation/message`, {
+  try {
+    console.log(
+      `📸 ${CAPTURE_DIRECTIONS.find(
+        (item) => item.key === captureDirection
+      )?.label} 촬영 시작`
+    );
+
+    // 사진 촬영
+    const photo = await cameraRef.current.takePictureAsync({
+      quality: 0.8,
+      skipProcessing: true,
+    });
+
+    if (!photo?.uri) {
+      console.warn('⚠️ 사진 URI가 없습니다.');
+      return;
+    }
+
+    console.log('✅ 사진 촬영 성공:', photo.uri);
+
+    const currentIndex = CAPTURE_DIRECTIONS.findIndex(
+      (item) => item.key === captureDirection
+    );
+
+    // 현재 방향 사진 저장
+    const updatedPhotos = {
+      ...capturedPhotos,
+      [captureDirection]: photo.uri,
+    };
+
+    setCapturedPhotos(updatedPhotos);
+
+    // ==========================================
+    // 아직 4장이 안 끝났으면 다음 방향으로 이동
+    // ==========================================
+    if (currentIndex < CAPTURE_DIRECTIONS.length - 1) {
+      const nextDirection =
+        CAPTURE_DIRECTIONS[currentIndex + 1];
+
+      console.log(
+        `➡️ 다음 방향: ${nextDirection.label}`
+      );
+
+      // 잠깐 기다린 뒤 방향 변경
+      setTimeout(() => {
+        setCaptureDirection(nextDirection.key);
+      }, 300);
+
+      return;
+    }
+
+    // ==========================================
+    // 4장 모두 촬영 완료
+    // ==========================================
+    console.log('🎉 4방향 촬영 완료');
+
+    setCapturedPhotoUri(updatedPhotos.front);
+
+    // 분석 시작
+    await processFourImages(updatedPhotos);
+
+  } catch (error) {
+    console.error('📸 촬영 오류:', error);
+  }
+};
+
+const processFourImages = async (photos) => {
+  setStep('ANALYZING');
+
+  try {
+    const results = [];
+
+    for (const direction of CAPTURE_DIRECTIONS) {
+      const photoUri = photos[direction.key];
+
+      if (!photoUri) {
+        console.warn(`⚠️ ${direction.label} 사진이 없습니다.`);
+        continue;
+      }
+
+      console.log(`📸 ${direction.label} 사진 분석 시작`);
+
+      const formattedUri =
+        Platform.OS === 'ios'
+          ? photoUri.replace('file://', '')
+          : photoUri;
+
+      const formData = new FormData();
+
+      formData.append('file', {
+        uri: formattedUri,
+        name: `${direction.key}.jpg`,
+        type: 'image/jpeg',
+      });
+
+      formData.append('user_id', String(userId));
+
+      const response = await fetch(`${BASE_URL}/detect-space`, {
         method: 'POST',
+        body: formData,
         headers: {
-          'Content-Type': 'application/json',
           'ngrok-skip-browser-warning': 'true',
         },
-        body: JSON.stringify({
-          session_id: sessionId,
-          user_message: userText,
-        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          `${direction.label} 이미지 분석 실패: ${response.status}`
+        );
+      }
+
+      const data = await response.json();
+
+      console.log(
+        `📦 ${direction.label} 분석 결과:`,
+        JSON.stringify(data, null, 2)
+      );
+
+      results.push({
+        direction: direction.key,
+        data,
+      });
+    }
+
+    // 4장 결과 통합
+    mergeFourImageResults(results, photos);
+
+  } catch (err) {
+    console.error('4방향 이미지 분석 에러:', err);
+
+    alert('4방향 공간 및 사물 인식 중 오류가 발생했습니다.');
+
+    setStep('CAMERA');
+  }
+};
+
+// ==========================================
+// 4방향 분석 결과 통합
+// ==========================================
+const mergeFourImageResults = (results, photos) => {
+  console.log('🔄 4방향 분석 결과 통합 시작');
+
+  let mergedSpace = '';
+  let mergedObjects = [];
+  let mergedTopics = [];
+
+  results.forEach((result, directionIndex) => {
+    const data = result.data;
+    const direction = result.direction;
+
+    // -----------------------------
+    // 1. 공간 정보
+    // -----------------------------
+    if (!mergedSpace) {
+      mergedSpace =
+        data?.space ||
+        data?.place ||
+        data?.detected_space ||
+        '';
+    }
+
+    // -----------------------------
+    // 2. 사물 정보
+    // -----------------------------
+    if (Array.isArray(data?.objects)) {
+      const directionObjects = data.objects
+        .map((obj, index) => {
+          if (
+            !obj?.box ||
+            typeof obj.box.x1 !== 'number' ||
+            typeof obj.box.y1 !== 'number' ||
+            typeof obj.box.x2 !== 'number' ||
+            typeof obj.box.y2 !== 'number'
+          ) {
+            return null;
+          }
+
+          const YOLO_WIDTH = 990;
+          const YOLO_HEIGHT = 1920;
+
+          const { x1, y1, x2, y2 } = obj.box;
+
+          const centerX = (x1 + x2) / 2;
+          const centerY = (y1 + y2) / 2;
+
+          const screenX =
+            (centerX / YOLO_WIDTH) * width;
+
+          const screenY =
+            (centerY / YOLO_HEIGHT) * height;
+
+          return {
+            id: `${direction}_${obj.id || index}`,
+
+            name:
+              obj.name ||
+              obj.label ||
+              'Object',
+
+            confidence:
+              obj.confidence || 0,
+
+            x: screenX,
+            y: screenY,
+
+            box: obj.box,
+
+            direction,
+          };
+        })
+        .filter(Boolean);
+
+      mergedObjects.push(...directionObjects);
+    }
+
+    // -----------------------------
+    // 3. 추천 주제
+    // -----------------------------
+    const topics =
+      data?.ai?.expressions ||
+      data?.expressions ||
+      data?.recommended_topics ||
+      [];
+
+    if (Array.isArray(topics)) {
+      mergedTopics.push(...topics);
+    }
+  });
+
+  // ==========================================
+  // 중복 제거
+  // ==========================================
+  mergedTopics = [...new Set(mergedTopics)];
+
+  console.log('🏠 통합 공간:', mergedSpace);
+  console.log('📦 통합 사물:', mergedObjects);
+  console.log('💡 통합 주제:', mergedTopics);
+
+  // ==========================================
+  // State 저장
+  // ==========================================
+  setCurrentSpace(
+    mergedSpace || '공간'
+  );
+
+  setDetectedObjects(
+    mergedObjects
+  );
+
+  setRecommendedTopics(
+    mergedTopics.length > 0
+      ? mergedTopics
+      : DUMMY_TOPICS
+  );
+
+  // 대표 사진 = 앞쪽 사진
+  if (photos?.front) {
+    setCapturedPhotoUri(
+      photos.front
+    );
+  }
+
+  // 학습 화면으로 이동
+  setStep('MAIN_LEARNING');
+};
+
+  const handlePlayPronunciation = (word) => {
+    if (Speech) Speech.speak(word, { language: 'en-US' });
+  };
+
+  // 4. 대화 시작
+  const startConversationAPI = async (topicName) => {
+    setCurrentTopic(topicName);
+    setIsTopicDrawerOpen(false);
+    setShowFeedbackBtn(false);
+    setTimeLeft(10);
+    setStep('CHAT');
+    setAiStatus('THINKING');
+    setActiveDialogue([]);
+    setShowParaphraseMap({});
+    setRecordingState('IDLE');
+
+    try {
+      const response = await fetch(`${BASE_URL}/conversation/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+        body: JSON.stringify({ target_expression: topicName }),
       });
 
       const data = await response.json();
-      if (data.success) {
-        return data.reply;
+      if (data.success || data.session_id) {
+        setSessionId(data.session_id);
+        setActiveDialogue([
+          {
+            speaker: 'AI',
+            text: data.reply || data.message || "Let's start talking!",
+            subText: data.subText || data.translation || '',
+            suggestion: data.suggestion || null,
+          },
+        ]);
       }
-    } catch (err) {
-      console.error('메시지 전송 에러:', err);
+    } catch (error) {
+      console.error('대화 시작 통신 오류:', error);
+      setActiveDialogue([{ speaker: 'AI', text: '대화 서버 연결에 실패했습니다.' }]);
+    } finally {
+      setAiStatus('IDLE');
     }
-    return null;
   };
 
-  const handleEndConversation = () => {
-  router.push('/FeedbackScreen');
+
+  // 5. 음성 녹음 버튼 터치 핸들러
+  const handleMicButtonPress = () => {
+    if (aiStatus === 'THINKING') return;
+
+    if (recordingState === 'IDLE') {
+      setRecordingState('RECORDING');
+    } else if (recordingState === 'RECORDING') {
+      setRecordingState('PROCESSING');
+      sendUserMessageToBackend("So glad to be talking with you too!");
+    }
+  };
+
+// 📌 기존 코드를 대체하는 새로운 State & 핸들러
+const [flaggedMap, setFlaggedMap] = useState({});
+const handleToggleFlag = (idx, chatItem) => {
+  const itemKey = chatItem.id || `chat_${idx}`;
+
+// onSaveToFeedback: 피드백 보관함 컴포넌트/상위 상태로 저장된 항목을 넘겨주는 함수 (선택)
+setFlaggedMap((prev) => {
+    const isCurrentlyFlagged = !!prev[itemKey]; // 👈 prev[itemKey]로 검사해야 정확합니다!
+    const nextFlaggedState = !isCurrentlyFlagged;
+    
+    const updated = { ...prev };
+
+    if (isCurrentlyFlagged) {
+      delete updated[itemKey]; // 토글 OFF
+    } else {
+      updated[itemKey] = {     // 토글 ON
+        id: itemKey,
+        en: chatItem.text || chatItem.en || '',
+        ko: chatItem.subText || chatItem.ko || '',
+        topic: typeof currentTopic !== 'undefined' ? currentTopic : 'General',
+        savedAt: new Date().toLocaleDateString(),
+      };
+    }
+
+    // 💡 외부 콜백(onSaveToFeedback)이 있다면 상태 계산 직후 내부에서 안전하게 실행
+    if (onSaveToFeedback) {
+      const targetItem = updated[itemKey] || { id: itemKey };
+      onSaveToFeedback(targetItem, nextFlaggedState);
+    }
+
+    return updated;
+  });
 };
 
-  // 공간 촬영 처리
-  const handleSingleSpaceScan = async () => {
-    if (!cameraRef.current || isLocked) return;
-
-    setIsLocked(true);
-    try {
-      const photo = await cameraRef.current.takePictureAsync({ quality: 0.5 });
-      const spaceName = await uploadSingleSpaceImage(photo.uri);
-
-      if (spaceName) {
-        setCurrentSpace(spaceName);
-        setStep('CONFIRMING');
-      } else {
-        alert('공간을 인식하지 못했습니다. 다시 촬영해주세요.');
-      }
-    } catch (err) {
-      console.error('촬영 오류:', err);
-    } finally {
-      setIsLocked(false);
-    }
-  };
-
-  // 사물 촬영 처리
-  const takePicture = async () => {
-    if (!cameraRef.current || isLocked) return;
-
-    try {
-      setIsLocked(true);
-      setScannedObject('사물을 분석하는 중...');
-      const photo = await cameraRef.current.takePictureAsync({ quality: 0.5 });
-      cameraRef.current.pausePreview();
-
-      const detectedResult = await uploadObjectScanImage(photo.uri);
-      console.log('🔥 백엔드 응답 데이터:', detectedResult);
-
-      if (detectedResult && detectedResult.success && detectedResult.ai?.expressions) {
-        setScannedObject(detectedResult.object);
-
-        const rawExpressions = detectedResult.ai.expressions || [];
-        const formattedCombinations = rawExpressions.map((exp, index) => {
-          const parts = exp.split('(');
-          const phrase = parts[0]?.trim().replace(/"/g, '') || exp;
-          const meaning = parts[1]?.replace(')', '').trim() || '';
-
-          return {
-            id: `server_${index}`,
-            phrase: phrase,
-            meaning: meaning,
-            dialogue: [],
-          };
-        });
-
-        setDetectedCandidates(formattedCombinations);
-        setStep('COMBINATIONS_LIST');
-      } else {
-        const errorMsg = detectedResult?.message || 'AI 문장 생성을 가져오지 못했습니다.';
-        alert(`⚠️ 안내: ${errorMsg}\n(감지된 객체: ${detectedResult?.object || '없음'})`);
-
-        cameraRef.current.resumePreview();
-        setIsLocked(false);
-        setScannedObject('사물을 다시 찾아주세요');
-      }
-    } catch (err) {
-      console.error('사진 촬영 및 통신 에러:', err);
-      cameraRef.current?.resumePreview();
-      setIsLocked(false);
-      setScannedObject('다시 시도해주세요');
-    }
-  };
-
-const handleUserSpeak = async (targetText) => {
-  if (aiStatus !== 'IDLE' || !targetText) return;
-
-  setAiStatus('STT_LISTENING');
-
-  const userSpeech = {
-    speaker: 'USER',
-    text: targetText,
-  };
-
-  setActiveDialogue((prev) => [...prev, userSpeech]);
-
-  setAiStatus('AI_THINKING');
-
-      setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
-
-  const backendAiReply = await sendUserMessageToBackend(targetText);
-
-
-  if (backendAiReply) {
-    setActiveDialogue((prev) => [
-      ...prev,
-      {
-        speaker:'AI',
-        text: backendAiReply
-      }
-    ]);
-  } else {
-    setActiveDialogue((prev)=>[
-      ...prev,
-      {
-        speaker:'AI',
-        text:"답변을 가져오지 못했습니다."
-      }
-    ]);
+  // 3. 외부 피드백 보관함(Feedback)으로 저장/삭제 상태 전달
+  if (onSaveToFeedback) {
+    const targetItem = {
+      id: itemKey,
+      en: chatItem.text || chatItem.en || '',
+      ko: chatItem.subText || chatItem.ko || '',
+      topic: currentTopic || 'General',
+      savedAt: new Date().toLocaleDateString(),
+    };
+    
+    // 피드백 보관함 업데이트 콜백 실행 (저장이면 객체 전달, 삭제면 null 또는 id 전달)
+    onSaveToFeedback(targetItem, nextFlaggedState);
   }
 
 
-  setAiStatus('IDLE');
+// 피드백 보관함으로 이동하는 함수/버튼에서 실행
+const handleGoToFeedback = () => {
+  // flaggedMap 객체의 값(value)들만 배열로 변환
+  const savedSentences = Object.values(flaggedMap);
 
-  setTimeout(() => {
-    scrollViewRef.current?.scrollToEnd({animated:true});
-  },100);
+  router.push({
+    pathname:
+    '/FeedbackScreen', // 피드백 보관함 화면 경로
+    params: {
+      savedData: JSON.stringify(savedSentences), // 객체 배열을 문자열로 전달
+    },
+  });
 };
+  // 6. 유저 메시지 전송 및 AI 응답 처리
+  const sendUserMessageToBackend = async (userText) => {
+    setActiveDialogue((prev) => [
+      ...prev,
+      {
+        speaker: 'USER',
+        text: userText,
+        paraphrase: 'I feel great to connect with you today as well!',
+      },
+    ]);
+    setAiStatus('THINKING');
 
-  if (!permission) return <View />;
+    if (USE_MOCK) {
+      setTimeout(() => {
+        setActiveDialogue((prev) => [
+          ...prev,
+          {
+            speaker: 'AI',
+            text: 'What kind of coffee do you usually enjoy in a cafe?',
+            subText: '카페에서 보통 어떤 종류의 커피를 즐겨 마셔요?',
+            suggestion: {
+              en: 'I usually like to drink an iced Americano.',
+              ko: '저는 보통 아이스 아메리카노를 즐겨 마셔요.',
+            },
+          },
+        ]);
+        setAiStatus('IDLE');
+        setRecordingState('IDLE');
+        setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+      }, 1200);
+      return;
+    }
+
+    if (!sessionId) return;
+    try {
+      const response = await fetch(`${BASE_URL}/conversation/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+        body: JSON.stringify({ session_id: sessionId, user_message: userText }),
+      });
+
+      const data = await response.json();
+      if (data.success && data.reply) {
+        setActiveDialogue((prev) => [
+          ...prev,
+          { 
+            speaker: 'AI', 
+            text: data.reply,
+            subText: data.subText || '',
+            suggestion: data.suggestion || null 
+          },
+        ]);
+      }
+    } catch (err) {
+      console.error('메시지 전송 에러:', err);
+    } finally {
+      setAiStatus('IDLE');
+      setRecordingState('IDLE');
+      setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+    }
+  };
+
+  const toggleParaphrase = (index) => {
+    setShowParaphraseMap((prev) => ({ ...prev, [index]: !prev[index] }));
+  };
+
+  if (!permission) return <View style={styles.center} />;
   if (!permission.granted) {
     return (
       <View style={styles.center}>
@@ -347,494 +788,1190 @@ const handleUserSpeak = async (targetText) => {
     );
   }
 
-  const targetScript = step === 'DIALOGUE_CHAT' ? selectedCombo?.dialogue || [] : [];
-  const nextUserStatement =
-    targetScript?.[currentTurn]?.speaker === 'USER' ? targetScript[currentTurn].text : null;
-
   return (
     <View style={styles.container}>
-      <CameraView style={styles.camera} facing="back" ref={cameraRef}>
-        <View style={styles.overlay}>
-          {/* 헤더 바 */}
-          <View style={styles.header}>
-            <View style={{ width: 32 }} />
-            <Text style={styles.headerTitle}>AI Context Scanner</Text>
-            <TouchableOpacity style={styles.closeButton} onPress={() => router.back()}>
-              <Ionicons name="close" size={32} color="white" />
+      {/* ---------------- 1. 카메라 스캐너 ---------------- */}
+      {step === 'CAMERA' && (
+        <CameraView style={styles.camera} facing="back" ref={cameraRef}>
+          <View style={styles.overlay}>
+           <View style={styles.header}>
+  {/* 뒤로가기 버튼 */}
+  <TouchableOpacity
+    style={styles.backButton}
+    onPress={() => router.back()}
+    activeOpacity={0.7}
+  >
+    <Ionicons name="arrow-back" size={28} color="white" />
+  </TouchableOpacity>
+
+  <Text style={styles.headerTitle}>AI Context Scanner</Text>
+
+  {/* 제목을 중앙에 유지하기 위한 빈 공간 */}
+  <View style={{ width: 38 }} />
+</View>
+
+            <View style={styles.scanBanner}>
+              <Text
+  style={{
+    color: 'white',
+    marginTop: 8,
+    fontSize: 13,
+    fontWeight: '600',
+  }}
+>
+  {captureDirection === 'front' && '1 / 4'}
+  {captureDirection === 'right' && '2 / 4'}
+  {captureDirection === 'back' && '3 / 4'}
+  {captureDirection === 'left' && '4 / 4'}
+</Text>
+              <Text style={styles.scanText}>
+  {USE_MOCK
+    ? '🧪 Mock 테스트 모드'
+    : CAPTURE_DIRECTIONS.find(
+        (item) => item.key === captureDirection
+      )?.instruction
+  }
+</Text>
+            </View>
+
+            <View style={styles.bottomControls}>
+              <TouchableOpacity style={styles.mainShutter} onPress={handleTakePicture} />
+            </View>
+          </View>
+        </CameraView>
+      )}
+
+      {/* ---------------- 2. 분석 중 로딩 ---------------- */}
+      {step === 'ANALYZING' && (
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color="#3b82f6" />
+          <Text style={{ color: 'white', marginTop: 15, fontSize: 16, fontWeight: '600' }}>
+            공간과 사물을 인식하고 있습니다...
+          </Text>
+        </View>
+      )}
+
+{/* ---------------- 3. 촬영 후 학습 화면 ---------------- */}
+{step === 'MAIN_LEARNING' && capturedPhotoUri && (
+  <ImageBackground source={{ uri: capturedPhotoUri }} style={styles.backgroundImage}>
+    {/* 상단 공간 배지 */}
+    {/* 촬영 후 화면 상단 헤더 */}
+<View style={styles.learningHeader}>
+
+  {/* 뒤로가기 */}
+  <TouchableOpacity
+    style={styles.learningHeaderBtn}
+    onPress={() => router.back()}
+    activeOpacity={0.7}
+  >
+    <Ionicons name="arrow-back" size={25} color="white" />
+  </TouchableOpacity>
+
+  {/* 오른쪽 재촬영 */}
+  <TouchableOpacity
+    style={styles.learningHeaderBtn}
+    onPress={() => {
+  setCapturedPhotoUri(null);
+
+  setCapturedPhotos({
+    front: null,
+    right: null,
+    back: null,
+    left: null,
+  });
+
+  setCaptureDirection('front');
+
+  setSelectedObject(null);
+  setDetectedObjects([]);
+  setRecommendedTopics([]);
+
+  setStep('CAMERA');
+}}
+    activeOpacity={0.7}
+  >
+    <Ionicons name="camera-reverse-outline" size={24} color="white" />
+  </TouchableOpacity>
+
+</View>
+    <View style={styles.topCenterSpaceContainer}>
+      <View style={styles.placeBadge}>
+        <Text style={styles.placeText}>{currentSpace.toUpperCase()}</Text>
+      </View>
+    </View>
+
+    {/* 사물 YOLO 핀 */}
+    {detectedObjects.map((obj) => (
+     <TouchableOpacity
+  key={obj.id}
+  style={[
+    styles.objectDot,
+    {
+      left: obj.x - 10,
+      top: obj.y - 10,
+    },
+  ]}
+  onPress={() => {
+    setSelectedObject((prev) =>
+      prev?.id === obj.id ? null : obj
+    );
+  }}
+  activeOpacity={0.8}
+/>
+    ))}
+
+    {/* 사물 터치 시 단어 팝업 카드 */}
+    {selectedObject && (
+<View style={styles.wordPopupCard}>
+  <View style={{ flex: 1 }}>
+    <Text style={styles.wordSubTitle}>
+      YOLO Detected
+    </Text>
+
+    <Text style={styles.wordText}>
+      {selectedObject.name}
+    </Text>
+  </View>
+
+  <View style={styles.wordPopupActions}>
+    <TouchableOpacity
+      style={styles.audioButton}
+      onPress={() => handlePlayPronunciation(selectedObject.name)}
+    >
+      <Ionicons
+        name="volume-medium"
+        size={22}
+        color="#3b82f6"
+      />
+    </TouchableOpacity>
+
+    <TouchableOpacity
+      onPress={() => setSelectedObject(null)}
+      style={{ marginLeft: 10 }}
+    >
+      <Ionicons
+        name="close-circle"
+        size={28}
+        color="#94a3b8"
+      />
+    </TouchableOpacity>
+  </View>
+</View>
+    )}
+
+    {/* AI 추천 주제 */}
+{!selectedObject && (
+  <View style={styles.topicPreviewContainer}>
+
+    {/* 접혀 있는 상태에서도 항상 보이는 헤더 */}
+    <TouchableOpacity
+      style={styles.topicPreviewHeader}
+      onPress={() =>
+        setShowRecommendedTopics((prev) => !prev)
+      }
+      activeOpacity={0.8}
+    >
+      <View style={styles.topicPreviewTitleRow}>
+        <Ionicons
+          name="sparkles"
+          size={18}
+          color="#3B82F6"
+        />
+
+        <Text style={styles.topicPreviewTitle}>
+          AI 추천 주제
+        </Text>
+      </View>
+
+      <View style={styles.topicHeaderRight}>
+        <Text style={styles.topicViewAllText}>
+          {showRecommendedTopics ? '접기' : '펼치기'}
+        </Text>
+
+        <Ionicons
+          name={
+            showRecommendedTopics
+              ? "chevron-down"
+              : "chevron-up"
+          }
+          size={17}
+          color="#64748B"
+        />
+      </View>
+    </TouchableOpacity>
+
+    {/* 펼쳤을 때만 추천 주제 표시 */}
+    {showRecommendedTopics && (
+      <View style={styles.topicPreviewList}>
+
+        {recommendedTopics.slice(0, 2).map((topic, index) => (
+          <TouchableOpacity
+            key={index}
+            style={styles.topicPreviewItem}
+            onPress={() => startConversationAPI(topic)}
+            activeOpacity={0.8}
+          >
+            <View style={styles.topicPreviewIcon}>
+              <Ionicons
+                name={
+                  index === 0
+                    ? "cafe-outline"
+                    : "chatbubble-ellipses-outline"
+                }
+                size={18}
+                color="#3B82F6"
+              />
+            </View>
+
+            <Text
+              style={styles.topicPreviewText}
+              numberOfLines={1}
+            >
+              {topic}
+            </Text>
+
+            <Ionicons
+              name="chevron-forward"
+              size={17}
+              color="#94A3B8"
+            />
+          </TouchableOpacity>
+        ))}
+
+        {/* 전체 보기 */}
+        <TouchableOpacity
+          style={styles.topicViewAllBtn}
+          onPress={() => setStep('TOPIC_ROADMAP')}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.topicViewAllText}>
+            전체 보기
+          </Text>
+
+          <Ionicons
+            name="chevron-forward"
+            size={16}
+            color="#64748B"
+          />
+        </TouchableOpacity>
+
+      </View>
+    )}
+
+  </View>
+)}
+  </ImageBackground>
+)}
+
+{/* ---------------- 4. 로드맵 전체 페이지 ---------------- */}
+{/* ---------------- 4. 로드맵 전체 페이지 (게임화 & 글래스모피즘) ---------------- */}
+{step === 'TOPIC_ROADMAP' && (
+  <View style={styles.roadmapContainer}>
+    {/* 상단 네비게이션 헤더 */}
+    <View style={styles.roadmapHeader}>
+      <TouchableOpacity
+        style={styles.roadmapBackBtn}
+        onPress={() => setStep('MAIN_LEARNING')}
+      >
+        <Ionicons name="arrow-back" size={22} color="#F8FAFC" />
+      </TouchableOpacity>
+      <Text style={styles.roadmapTitle}>AI 맞춤 학습 코스</Text>
+      <View style={styles.headerRightBadge}>
+        <Ionicons name="sparkles" size={14} color="#60A5FA" />
+        <Text style={styles.headerRightText}>{recommendedTopics.length} Steps</Text>
+      </View>
+    </View>
+
+    <ScrollView
+      showsVerticalScrollIndicator={false}
+      contentContainerStyle={styles.roadmapScrollContent}
+    >
+      {/* 히어로 공간 카드 */}
+      <View style={styles.spaceHeroCard}>
+        <View style={styles.spaceHeroTag}>
+          <Ionicons name="location" size={14} color="#60A5FA" />
+          <Text style={styles.spaceHeroTagText}>LOCATION DETECTED</Text>
+        </View>
+        <Text style={styles.spaceHeroTitle}>[{currentSpace.toUpperCase()}]</Text>
+        <Text style={styles.spaceHeroSub}>상황별 핵심 표현을 단계별로 익혀보세요</Text>
+      </View>
+
+      {/* 로드맵 노드 영역 */}
+      <View style={styles.roadmapPathContainer}>
+        {/* 노드들을 잇는 배경 트랙 라인 */}
+        <View style={styles.backgroundTrackLine} />
+
+        {recommendedTopics.map((topic, index) => {
+          const isFirst = index === 0; // 첫 번째 주제 강조
+          const stepInCycle = index % 4;
+
+          let alignStyle = styles.nodeAlignLeft;
+          if (stepInCycle === 0) alignStyle = styles.nodeAlignLeft;
+          else if (stepInCycle === 1) alignStyle = styles.nodeAlignCenterLeft;
+          else if (stepInCycle === 2) alignStyle = styles.nodeAlignCenterRight;
+          else if (stepInCycle === 3) alignStyle = styles.nodeAlignRight;
+
+          return (
+            <TouchableOpacity
+              key={index}
+              style={[
+                styles.speakStyleNode,
+                alignStyle,
+                isFirst && styles.activeFirstNode, // 첫 번째 노드 네온 효과
+              ]}
+              onPress={() => startConversationAPI(topic)}
+              activeOpacity={0.85}
+            >
+              {/* 노드 번호 배지 */}
+              <View style={[styles.nodeBadge, isFirst && styles.activeNodeBadge]}>
+                <Text style={[styles.nodeBadgeText, isFirst && styles.activeNodeBadgeText]}>
+                  {index + 1}
+                </Text>
+              </View>
+
+              {/* 주제 텍스트 & 아이콘 */}
+              <View style={styles.nodeTextWrapper}>
+                <Text style={[styles.speakNodeTopicText, isFirst && styles.activeNodeTopicText]}>
+                  {topic}
+                </Text>
+                {isFirst && (
+                  <View style={styles.startBadge}>
+                    <Text style={styles.startBadgeText}>START</Text>
+                  </View>
+                )}
+              </View>
+
+              <Ionicons
+                name={isFirst ? "play-circle" : "chevron-forward-circle"}
+                size={22}
+                color={isFirst ? "#60A5FA" : "#475569"}
+                style={{ marginLeft: 8 }}
+              />
             </TouchableOpacity>
+          );
+        })}
+      </View>
+    </ScrollView>
+  </View>
+)}
+
+      {/* ---------------- 4. 대화 화면 ---------------- */}
+      {step === 'CHAT' && (
+        <View style={styles.chatContainer}>
+          {/* 💡 상단 헤더: 아이콘 제거 및 중앙 대화 주제 표시 */}
+          <View style={styles.chatHeader}>
+            <Text style={styles.timerText}>{formatTime(timeLeft)}</Text>
+            <Text style={styles.characterName} numberOfLines={1}>
+              {currentTopic || '자유 대화'}
+            </Text>
           </View>
 
-          {/* 1. 공간 스캔 단계 */}
-          {step === 'SCANNING' && (
-            <View style={styles.scanBanner}>
-              <Text style={styles.scanText}>공간을 중앙에 맞추고 촬영하세요!</Text>
+          {/* 대화 스크롤 영역 */}
+          <ScrollView
+            ref={scrollViewRef}
+            style={styles.chatScrollView}
+            contentContainerStyle={{ paddingBottom: 20 }}
+            showsVerticalScrollIndicator={false}
+          >
+            {activeDialogue.map((chat, idx) => {
+              const isAI = chat.speaker === 'AI';
+              const itemKey = chat.id || `chat_${idx}`;
+              const isFlagged = !!flaggedMap[itemKey];
 
+              return (
+                <View key={idx} style={{ marginBottom: 20 }}>
+                  {!isAI ? (
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <View style={styles.userBubble}>
+                        <Text style={styles.userBubbleText}>{chat.text}</Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.paraphraseBtn}
+                        onPress={() => toggleParaphrase(idx)}
+                      >
+                        <Ionicons name="sparkles-outline" size={12} color="#4ade80" style={{ marginRight: 4 }} />
+                        <Text style={styles.paraphraseBtnText}>패러프레이징</Text>
+                      </TouchableOpacity>
+
+                      {showParaphraseMap[idx] && (
+                        <View style={styles.paraphraseBox}>
+                          <Text style={styles.paraphraseTitle}>💡 더 자연스러운 표현:</Text>
+                          <Text style={styles.paraphraseContent}>{chat.paraphrase}</Text>
+                        </View>
+                      )}
+                    </View>
+                  ) : (
+                    <View style={{ alignItems: 'flex-start', width: '100%' }}>
+                      <Text style={styles.aiMainText}>{chat.text}</Text>
+                      {chat.subText && <Text style={styles.aiSubText}>{chat.subText}</Text>}
+
+                      <View style={styles.aiActionRow}>
+                  {/* 플래그(피드백 저장) 버튼 */}
+                  <TouchableOpacity 
+                    style={{ marginRight: 15 }}
+                    onPress={() => handleToggleFlag(idx, chat)}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Ionicons 
+                      name={isFlagged ? "flag" : "flag-outline"} 
+                      size={18} 
+                      color={isFlagged ? "#22c55e" : "#94a3b8"} 
+                    />
+                  </TouchableOpacity>
+                  <TouchableOpacity>
+                          <Ionicons name="bookmark-outline" size={18} color="#94a3b8" />
+                        </TouchableOpacity>
+                      </View>
+
+                      {chat.suggestion && (
+                        <View style={styles.suggestionCard}>
+                          <View style={styles.suggestionHeader}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                              <Text style={{ fontSize: 14 }}>💡</Text>
+                              <Text style={styles.suggestionTitle}>이렇게 말할 수 있어요</Text>
+                            </View>
+                            <TouchableOpacity onPress={() => handlePlayPronunciation(chat.suggestion.en)}>
+                              <Ionicons name="volume-medium" size={20} color="#cbd5e1" />
+                            </TouchableOpacity>
+                          </View>
+                          <Text style={styles.suggestionEnText}>{chat.suggestion.en}</Text>
+                          <Text style={styles.suggestionKoText}>{chat.suggestion.ko}</Text>
+                        </View>
+                      )}
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+
+            {aiStatus === 'THINKING' && (
+              <ActivityIndicator size="small" color="#ffffff" style={{ alignSelf: 'flex-start', marginVertical: 10 }} />
+            )}
+          </ScrollView>
+
+          {/* 하단 영역: Animated 파동 & 컨트롤 버튼 */}
+          <View style={styles.bottomArea}>
+            {/* 🌊 음성 파동 */}
+            <View style={styles.waveformContainer}>
+              {waveAnimValues.map((animVal, i) => (
+                <Animated.View
+                  key={i}
+                  style={[
+                    styles.waveformBar,
+                    { height: animVal },
+                  ]}
+                />
+              ))}
+            </View>
+
+            {/* 컨트롤 버튼 ROW (X | ↑ | 😊 조건부 노출) */}
+            <View style={styles.imageStyleControls}>
               <TouchableOpacity
-                style={styles.mainActionBtn}
-                onPress={handleSingleSpaceScan}
-                disabled={isLocked}
+                style={styles.sideCircleBtn}
+                onPress={() => setStep('MAIN_LEARNING')}
               >
-                <Text style={styles.btnTextWhite}>
-                  {isLocked ? '분석 중...' : '📸 공간 촬영하기'}
-                </Text>
+                <Ionicons name="close" size={28} color="#FFF" />
               </TouchableOpacity>
 
-              {isLocked && (
-                <View style={{ marginTop: 20 }}>
-                  <ActivityIndicator size="large" color="#3b82f6" />
-                  <Text style={{ color: 'white', marginTop: 10 }}>공간 맥락 분석 중...</Text>
-                </View>
+              <TouchableOpacity
+                style={styles.mainArrowBtn}
+                onPress={handleMicButtonPress}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="arrow-up" size={32} color="#000" />
+              </TouchableOpacity>
+
+              {showFeedbackBtn ? (
+                <TouchableOpacity
+                  style={styles.sideCircleBtn}
+                  onPress={handleGoToFeedback} // ✅ 저장된 flaggedMap 데이터를 들고 이동
+              >
+                  <Ionicons name="happy-outline" size={26} color="#FFF" />
+                </TouchableOpacity>
+              ) : (
+                <View style={{ width: 54, height: 54 }} />
               )}
             </View>
-          )}
-
-          {/* 2. 공간 스캔 확인 단계 */}
-          {step === 'CONFIRMING' && (
-            <View style={styles.confirmBox}>
-              <Ionicons name="location-sharp" size={36} color="#3b82f6" style={{ marginBottom: 5 }} />
-              <Text style={styles.locationTitle}>📍 여기가 [{currentSpace}] 가 맞나요?</Text>
-              <Text style={styles.subText}>AI가 360도 스캔을 통해 장소를 예측했습니다.</Text>
-
-              <View style={styles.verticalButtonGroup}>
-                <TouchableOpacity
-                  style={styles.mainActionBtn}
-                  onPress={() => {
-                    cameraRef.current?.resumePreview();
-                    setIsLocked(false);
-                    setScannedObject('사물을 찾는 중...');
-                    setStep('OBJECT_SCANNING');
-                  }}
-                >
-                  <Text style={styles.btnTextWhite}>네, 맞아요! 여기서 사물 찾기</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.spaceSkipBtn}
-                  onPress={() => {
-                    setStep('SPACE_DIALOGUE_CHAT');
-                    startConversationAPI(currentSpace);
-                  }}
-                >
-                  <Text style={styles.btnTextBlue}>장소 전용 "공간 대화" 시작하기</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity style={styles.retryBtn} onPress={() => setStep('SCANNING')}>
-                  <Text style={styles.btnTextBlack}>❌ 아니요, 공간 다시 스캔하기</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          )}
-
-          {/* 3. 사물 스캔 화면 */}
-          {step === 'OBJECT_SCANNING' && (
-            <View style={styles.objectContainer}>
-              <View style={styles.scannerBox}>
-                <View style={[styles.corner, styles.topLeft]} />
-                <View style={[styles.corner, styles.topRight]} />
-                <View style={[styles.corner, styles.bottomLeft]} />
-                <View style={[styles.corner, styles.bottomRight]} />
-                <View style={styles.wordButton}>
-                  <Text style={styles.contextBadge}>{currentSpace}</Text>
-                  <Text style={styles.bigWord}>{scannedObject.toUpperCase()}</Text>
-                </View>
-                <View style={styles.scanLine} />
-              </View>
-              <Text style={styles.hintText}>
-                공부할 오브젝트를 사각형 안에 맞추고 하단 셔터를 누르세요
-              </Text>
-            </View>
-          )}
-
-          {/* 카메라 셔터 하단 영역 */}
-          {(step === 'SCANNING' || step === 'CONFIRMING' || step === 'OBJECT_SCANNING') && (
-            <View style={styles.bottomControls}>
-              <View style={styles.circleBtn}>
-                <Text style={{ color: 'white' }}>1x</Text>
-              </View>
-              <TouchableOpacity
-                style={[
-                  styles.mainShutter,
-                  step !== 'OBJECT_SCANNING' && { backgroundColor: '#4b5563', opacity: 0.5 },
-                ]}
-                disabled={isLocked || step !== 'OBJECT_SCANNING'}
-                onPress={takePicture}
-              />
-              <View style={styles.circleBtn}>
-                <Ionicons name="flash" size={20} color="white" />
-              </View>
-            </View>
-          )}
-
-          {/* 4. 추천 표현 (관련 예문) 선택 카드 목록 */}
-          {step === 'COMBINATIONS_LIST' && (
-            <View style={styles.sheetContainer}>
-              <TouchableOpacity
-                style={styles.sheetCloseBtn}
-                onPress={() => {
-                  cameraRef.current?.resumePreview();
-                  setIsLocked(false);
-                  setStep('OBJECT_SCANNING');
-                }}
-              >
-                <Ionicons name="close-circle" size={28} color="#999" />
-              </TouchableOpacity>
-              <Text style={styles.chatTitle}>🎯 추천 표현 선택</Text>
-              <View style={styles.sheetDivider} />
-              <ScrollView style={styles.comboList} showsVerticalScrollIndicator={false}>
-                {detectedCandidates.map((item) => (
-                  <TouchableOpacity
-                    key={item.id}
-                    style={styles.comboCard}
-                    onPress={() => {
-                      setSelectedCombo(item);
-                      setStep('DIALOGUE_CHAT');
-                      // 선택한 예문 백엔드 전달 -> AI 첫 응답 요청
-                      startConversationAPI(item.phrase);
-                    }}
-                  >
-                    <View style={styles.comboInfo}>
-                      <Text style={styles.comboPhrase}>{item.phrase}</Text>
-                      <Text style={styles.comboMeaning}>{item.meaning}</Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={20} color="#3b82f6" />
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-          )}
-
-          {/* 5. AI 대화 / 응답 표시 화면 */}
-          {step === 'DIALOGUE_CHAT' && selectedCombo && (
-            <View style={styles.sheetContainer}>
-              <View style={styles.sheetHeader}>
-                <TouchableOpacity
-                  style={styles.backArrowBtn}
-                  onPress={() => setStep('COMBINATIONS_LIST')}
-                >
-                  <Ionicons name="arrow-back" size={24} color="#333" />
-                </TouchableOpacity>
-                <View style={{ alignItems: 'center', flex: 1, marginRight: 24 }}>
-                  <Text style={styles.chatTitle}>{scannedObject.toUpperCase()}</Text>
-                  <Text style={styles.chatSubTitle}>"{selectedCombo.phrase}" 학습 세션</Text>
-                </View>
-              </View>
-
-              <View style={styles.sheetDivider} />
-
-              <ScrollView
-                ref={scrollViewRef}
-                style={styles.chatContainer}
-                showsVerticalScrollIndicator={false}
-              >
-                {/* AI 응답 로딩 표시 */}
-                {aiStatus === 'THINKING' && (
-                  <View style={{ paddingVertical: 20, alignItems: 'center' }}>
-                    <ActivityIndicator size="large" color="#3b82f6" />
-                    <Text style={{ marginTop: 10, color: '#666', fontSize: 13 }}>
-                      AI가 대화를 생성하고 있습니다...
-                    </Text>
-                  </View>
-                )}
-
-                {/* 대화 메시지 목록 출력 */}
-                {activeDialogue.map((chat, idx) => {
-                  const isAI = chat.speaker === 'AI';
-                  return (
-                    <View
-                      key={idx}
-                      style={[styles.chatRow, isAI ? styles.aiRow : styles.userRow]}
-                    >
-                      {isAI && (
-                        <View style={styles.avatar}>
-                          <Text style={styles.avatarText}>AI</Text>
-                        </View>
-                      )}
-                      <View style={[styles.bubble, isAI ? styles.aiBubble : styles.userBubble]}>
-                        <Text style={[styles.bubbleText, isAI ? styles.aiText : styles.userText]}>
-                          {chat.text}
-                        </Text>
-                      </View>
-                    </View>
-                  );
-                })}
-              </ScrollView>
-              <View style={styles.endButtonContainer}>
-  <TouchableOpacity
-    style={styles.endChatBtn}
-    onPress={handleEndConversation}
-  >
-    <Text style={styles.endChatBtnText}>
-      학습 종료하고 피드백 보기
-    </Text>
-  </TouchableOpacity>
-</View>
-            </View>
-          )}
-
-          {/* 6. 공간 전용 대화 세션 화면 */}
-          {step === 'SPACE_DIALOGUE_CHAT' && (
-            <View style={styles.sheetContainer}>
-              <View style={styles.sheetHeader}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.chatTitle}>🌳 장소 대화 연습 ({currentSpace})</Text>
-                </View>
-                <TouchableOpacity
-                  style={styles.sheetCloseBtn}
-                  onPress={() => setStep('CONFIRMING')}
-                >
-                  <Ionicons name="close-circle" size={28} color="#999" />
-                </TouchableOpacity>
-              </View>
-
-              <View style={styles.sheetDivider} />
-
-              <ScrollView
-                ref={scrollViewRef}
-                style={styles.chatContainer}
-                showsVerticalScrollIndicator={false}
-              >
-                {aiStatus === 'THINKING' && (
-                  <View style={{ paddingVertical: 20, alignItems: 'center' }}>
-                    <ActivityIndicator size="large" color="#3b82f6" />
-                    <Text style={{ marginTop: 10, color: '#666', fontSize: 13 }}>
-                      AI가 대화를 생성하고 있습니다...
-                    </Text>
-                  </View>
-                )}
-
-                {activeDialogue.map((chat, idx) => {
-                  const isAI = chat.speaker === 'AI';
-                  return (
-                    <View
-                      key={idx}
-                      style={[styles.chatRow, isAI ? styles.aiRow : styles.userRow]}
-                    >
-                      {isAI && (
-                        <View style={styles.avatar}>
-                          <Text style={styles.avatarText}>AI</Text>
-                        </View>
-                      )}
-                      <View style={[styles.bubble, isAI ? styles.aiBubble : styles.userBubble]}>
-                        <Text style={[styles.bubbleText, isAI ? styles.aiText : styles.userText]}>
-                          {chat.text}
-                        </Text>
-                      </View>
-                    </View>
-                  );
-                })}
-              </ScrollView>
-              <View style={styles.endButtonContainer}>
-  <TouchableOpacity
-    style={styles.endChatBtn}
-    onPress={handleEndConversation}
-  >
-    <Text style={styles.endChatBtnText}>
-      학습 종료하고 피드백 보기
-    </Text>
-  </TouchableOpacity>
-</View>
-            </View>
-          )}
+          </View>
         </View>
-      </CameraView>
+      )}
     </View>
   );
 }
 
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000' },
+  container: { flex: 1, backgroundColor: '#000000' },
   camera: { flex: 1 },
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.2)', justifyContent: 'space-between' },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: 60,
-    paddingHorizontal: 20,
-  },
-  endButtonContainer:{
-  paddingVertical:15,
-  alignItems:'center',
-},
-
-endChatBtn:{
-  backgroundColor:'#3b82f6',
-  paddingVertical:14,
-  paddingHorizontal:30,
-  borderRadius:22,
-},
-
-endChatBtnText:{
-  color:'white',
-  fontWeight:'700',
-  fontSize:15,
-},
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'space-between' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 60, paddingHorizontal: 20 },
   headerTitle: { color: 'white', fontSize: 18, fontWeight: 'bold' },
-  closeButton: { padding: 5 },
-  scanBanner: { alignItems: 'center', marginTop: '25%' },
+  backButton: {
+  width: 38,
+  height: 38,
+  borderRadius: 19,
+  backgroundColor: 'rgba(0,0,0,0.45)',
+  justifyContent: 'center',
+  alignItems: 'center',
+},
+  scanBanner: { alignItems: 'center', marginTop: '20%' },
+  scanText: { color: 'white', fontSize: 15, fontWeight: '600', backgroundColor: 'rgba(0,0,0,0.7)', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 20 },
+  bottomControls: { flexDirection: 'row', justifyContent: 'center', marginBottom: 50 },
+  mainShutter: { width: 72, height: 72, borderRadius: 36, backgroundColor: 'white', borderWidth: 5, borderColor: 'rgba(255,255,255,0.4)' },
 
-  scanText: {
-    color: 'white',
-    fontSize: 15,
-    fontWeight: '600',
-    marginBottom: 35,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    paddingHorizontal: 22,
-    paddingVertical: 14,
-    borderRadius: 20,
-    textAlign: 'center',
-    width: '85%',
-    lineHeight: 22,
+  backgroundImage: { flex: 1, resizeMode: 'cover' },
+retakeBtn: {
+  position: 'absolute',
+  top: 50,
+  right: 20,
+
+  width: 48,
+  height: 48,
+  borderRadius: 24,
+
+  backgroundColor: 'rgba(15, 23, 42, 0.7)',
+
+  justifyContent: 'center',
+  alignItems: 'center',
+
+  zIndex: 50,
+},
+ topCenterSpaceContainer: { 
+    marginTop: 60, 
+    alignItems: 'center', 
+    width: '100%',
+    zIndex: 10, // 다른 레이어에 가려지지 않도록 설정
+  },
+  placeBadge: { 
+    backgroundColor: '#FFFFFF', 
+    paddingHorizontal: 28, 
+    paddingVertical: 12, 
+    borderRadius: 24, 
+    // iOS 그림자
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    // Android 그림자
+    elevation: 8,
+    // 은은한 테두리 강조
+    borderWidth: 1.5,
+    borderColor: 'rgba(59, 130, 246, 0.3)', // 포인트 컬러(파란색) 반투명 테두리
+  },
+  placeText: { 
+    fontSize: 24, // 18 -> 24로 대폭 확대
+    fontWeight: '900', // 더 두껍게 (Extra Bold)
+    color: '#0F172A', // 더 깊은 딥블루/블랙 계열로 가독성 증가
+    letterSpacing: 2, // 자간을 넓혀 깔끔하고 고급스러운 느낌 연출
   },
 
-    aiText:{
-  color:'#334155',
-  },
-  
-  confirmBox: {
-    backgroundColor: 'white',
-    padding: 24,
-    borderRadius: 24,
-    width: '88%',
-    alignSelf: 'center',
-    alignItems: 'center',
-    marginTop: '20%',
-    elevation: 10,
-  },
-  locationTitle: { fontSize: 18, fontWeight: 'bold', color: '#1f2937', textAlign: 'center' },
-  subText: { fontSize: 12, color: '#6b7280', marginTop: 6, marginBottom: 20, textAlign: 'center' },
-  verticalButtonGroup: { width: '100%', gap: 10 },
-  mainActionBtn: {
-    backgroundColor: '#3b82f6',
-    width: '100%',
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  spaceSkipBtn: {
-    backgroundColor: '#eff6ff',
-    borderColor: '#bfdbfe',
-    borderWidth: 1,
-    width: '100%',
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  retryBtn: {
-    backgroundColor: '#f3f4f6',
-    width: '100%',
-    paddingVertical: 12,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  btnTextWhite: { color: 'white', fontWeight: '700', fontSize: 15 },
-  btnTextBlue: { color: '#2563eb', fontWeight: '700', fontSize: 15 },
-  btnTextBlack: { color: '#4b5563', fontWeight: '600', fontSize: 14 },
-  objectContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  scannerBox: {
-    width: width * 0.72,
-    height: width * 0.72,
-    position: 'relative',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  corner: { position: 'absolute', width: 30, height: 30, borderColor: '#3b82f6', borderWidth: 4 },
-  topLeft: { top: 0, left: 0, borderRightWidth: 0, borderBottomWidth: 0 },
-  topRight: { top: 0, right: 0, borderLeftWidth: 0, borderBottomWidth: 0 },
-  bottomLeft: { bottom: 0, left: 0, borderRightWidth: 0, borderTopWidth: 0 },
-  bottomRight: { bottom: 0, right: 0, borderLeftWidth: 0, borderTopWidth: 0 },
-  wordButton: {
-    backgroundColor: '#3b82f6',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 14,
-    zIndex: 10,
-  },
-  contextBadge: { color: '#93c5fd', fontSize: 10, fontWeight: '700', textAlign: 'center' },
-  bigWord: { color: 'white', fontWeight: 'bold', fontSize: 18, marginTop: 2 },
-  scanLine: { width: '90%', height: 2, backgroundColor: '#3b82f6', position: 'absolute', top: '50%' },
-  hintText: {
-    color: 'white',
-    marginTop: 30,
-    fontSize: 13,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 20,
-  },
-  sheetContainer: {
-    backgroundColor: 'white',
-    width: '100%',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    padding: 24,
-    height: height * 0.52,
+  rightMiddleTopicBtn: {
     position: 'absolute',
-    bottom: 0,
-  },
-  sheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  sheetCloseBtn: { position: 'absolute', right: 0, top: 0 },
-  sheetDivider: { height: 1, backgroundColor: '#e5e7eb', marginVertical: 12 },
-  comboList: { flex: 1 },
-  comboCard: {
+    right: 0,
+    top: height * 0.42,
+    backgroundColor: 'rgba(15, 23, 42, 0.85)',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderTopLeftRadius: 20,
+    borderBottomLeftRadius: 20,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#f8fafc',
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 10,
+    gap: 6,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+    borderRightWidth: 0,
+    elevation: 8,
   },
-  comboInfo: { flex: 1 },
-  comboPhrase: { fontSize: 16, fontWeight: '700', color: '#1e293b' },
-  comboMeaning: { fontSize: 13, color: '#64748b', marginTop: 4 },
-  backArrowBtn: { padding: 4 },
-  chatTitle: { fontSize: 16, fontWeight: '700', color: '#111827' },
-  chatSubTitle: { fontSize: 12, color: '#ef4444', marginTop: 2 },
-  chatContainer: { flex: 1, marginTop: 5, marginBottom: 10 },
-  chatRow: { flexDirection: 'row', marginBottom: 12, alignItems: 'flex-end' },
-  aiRow: { justifyContent: 'flex-start' },
-  userRow: { justifyContent: 'flex-end' },
-  avatar: {
-    width: 32,
-    height: 32,
+  rightMiddleTopicText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
+
+objectDot: {
+  position: 'absolute',
+  width: 20,
+  height: 20,
+  borderRadius: 10,
+
+  backgroundColor: '#FFFFFF',
+  borderWidth: 3,
+  borderColor: '#3B82F6',
+
+  shadowColor: '#000',
+  shadowOffset: {
+    width: 0,
+    height: 2,
+  },
+  shadowOpacity: 0.25,
+  shadowRadius: 4,
+
+  elevation: 6,
+
+  zIndex: 50,
+},
+
+  learningGuideCard: {
+  position: 'absolute',
+  bottom: height * 0.06,
+  left: '10%',
+  right: '10%',
+  backgroundColor: 'rgba(15, 23, 42, 0.88)',
+  borderRadius: 20,
+  paddingVertical: 18,
+  paddingHorizontal: 20,
+  flexDirection: 'row',
+  alignItems: 'center',
+  borderWidth: 1,
+  borderColor: 'rgba(96, 165, 250, 0.35)',
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 4 },
+  shadowOpacity: 0.3,
+  shadowRadius: 8,
+  elevation: 8,
+},
+
+learningGuideIcon: {
+  width: 48,
+  height: 48,
+  borderRadius: 24,
+  backgroundColor: 'rgba(59, 130, 246, 0.18)',
+  justifyContent: 'center',
+  alignItems: 'center',
+  marginRight: 14,
+},
+
+learningGuideContent: {
+  flex: 1,
+},
+
+learningGuideTitle: {
+  color: '#FFFFFF',
+  fontSize: 15,
+  fontWeight: '800',
+  marginBottom: 5,
+},
+
+learningGuideText: {
+  color: '#CBD5E1',
+  fontSize: 12,
+  lineHeight: 18,
+},
+
+ modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'flex-end' },
+  rightSideDrawer: { width: width * 0.65, height: '100%', backgroundColor: 'rgba(15, 23, 42, 0.95)', padding: 20, paddingTop: 60 },
+  drawerTitle: { color: 'white', fontSize: 16, fontWeight: 'bold', marginBottom: 20 },
+  topicCardItem: { backgroundColor: 'rgba(255,255,255,0.08)', padding: 14, borderRadius: 12, marginBottom: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  topicItemText: { color: 'white', fontSize: 13, flex: 1, paddingRight: 8 },
+
+  /* 블랙 대화 화면 UI */
+  chatContainer: { flex: 1, backgroundColor: '#121212', paddingTop: 60, paddingHorizontal: 20 },
+  
+  /* 💡 중앙 정렬 타이머 및 대화 주제 스타일 */
+  chatHeader: { alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
+  timerText: { color: '#94a3b8', fontSize: 13, fontWeight: '500' },
+  characterName: { color: '#FFFFFF', fontSize: 20, fontWeight: 'bold', marginTop: 4, textAlign: 'center' },
+
+  chatScrollView: { flex: 1, marginTop: 10 },
+  aiMainText: { color: '#FFFFFF', fontSize: 18, fontWeight: '500', lineHeight: 26 },
+  aiSubText: { color: '#94a3b8', fontSize: 14, marginTop: 6, lineHeight: 20 },
+  aiActionRow: { flexDirection: 'row', marginTop: 12, marginBottom: 16 },
+
+  suggestionCard: {
+    width: '100%',
+    backgroundColor: '#1c1c1e',
     borderRadius: 16,
-    backgroundColor: '#3b82f6',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 8,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#333336',
+    borderStyle: 'dashed',
+    marginTop: 8,
   },
-  avatarText: { color: 'white', fontSize: 11, fontWeight: 'bold' },
-  bubble: { maxWidth: width * 0.65, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 16 },
-  aiBubble: { backgroundColor: '#f1f5f9', borderBottomLeftRadius: 4 },
-  userBubble: { backgroundColor: '#3b82f6', borderBottomRightRadius: 4 },
-  bubbleText: { fontSize: 14, color: '#334155', lineHeight: 20 },
-  userText: { color: 'white' },
-  bottomControls: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    marginBottom: 50,
-  },
-  mainShutter: {
-    width: 70,
-    height: 70,
-    borderRadius: 35,
-    backgroundColor: 'white',
-    borderWidth: 5,
-    borderColor: 'rgba(255,255,255,0.4)',
-  },
-  circleBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+  suggestionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  suggestionTitle: { color: '#FFFFFF', fontSize: 13, fontWeight: '600' },
+  suggestionEnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600', marginBottom: 4 },
+  suggestionKoText: { color: '#94a3b8', fontSize: 13 },
+
+  userBubble: { backgroundColor: '#262626', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 18, maxWidth: '80%' },
+  userBubbleText: { color: '#FFF', fontSize: 15 },
+  paraphraseBtn: { flexDirection: 'row', alignItems: 'center', marginTop: 6 },
+  paraphraseBtnText: { color: '#4ade80', fontSize: 11 },
+  paraphraseBox: { backgroundColor: '#18271e', padding: 10, borderRadius: 10, marginTop: 6, maxWidth: '85%' },
+  paraphraseTitle: { color: '#4ade80', fontSize: 11, fontWeight: 'bold' },
+  paraphraseContent: { color: '#e2e8f0', fontSize: 12, marginTop: 2 },
+
+  /* 하단 컨트롤러 & 음성 파동 */
+  bottomArea: { paddingBottom: 40, alignItems: 'center' },
+  waveformContainer: { flexDirection: 'row', alignItems: 'center', gap: 3, height: 36, marginBottom: 20 },
+  waveformBar: { width: 3, backgroundColor: '#FFFFFF', borderRadius: 2 },
+
+  imageStyleControls: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', width: '80%' },
+  sideCircleBtn: { width: 54, height: 54, borderRadius: 27, backgroundColor: '#262626', justifyContent: 'center', alignItems: 'center' },
+  mainArrowBtn: { width: 68, height: 68, borderRadius: 34, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center' },
+
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000' },
   permissionButton: { backgroundColor: '#3b82f6', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 10 },
   permissionText: { color: 'white', fontWeight: 'bold' },
+  /* ---------------- 로드맵 페이지 전용 스타일 ---------------- */
+ /* ---------------- 고급 게임화 로드맵 전용 스타일 ---------------- */
+  roadmapContainer: {
+    flex: 1,
+    backgroundColor: '#090D16', // 깊이감 있는 사이버펑크 딥 네이비
+    paddingTop: 50,
+  },
+  roadmapHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+  },
+  roadmapBackBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#1E293B',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  roadmapTitle: {
+    color: '#F8FAFC',
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: -0.3,
+  },
+  headerRightBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(30, 58, 138, 0.4)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(96, 165, 250, 0.3)',
+  },
+  headerRightText: {
+    color: '#93C5FD',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  roadmapScrollContent: {
+    paddingHorizontal: 20,
+    paddingBottom: 90,
+  },
+
+  /* 히어로 공간 카드 */
+  spaceHeroCard: {
+    backgroundColor: '#111827',
+    padding: 22,
+    borderRadius: 24,
+    marginBottom: 28,
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.25)',
+    shadowColor: '#3B82F6',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+  spaceHeroTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 6,
+  },
+  spaceHeroTagText: {
+    color: '#60A5FA',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+  },
+  spaceHeroTitle: {
+    color: '#FFFFFF',
+    fontSize: 26,
+    fontWeight: '900',
+    letterSpacing: -0.5,
+  },
+  spaceHeroSub: {
+    color: '#94A3B8',
+    fontSize: 13,
+    marginTop: 4,
+  },
+
+  /* 경로 & 노드 컨테이너 */
+  roadmapPathContainer: {
+    position: 'relative',
+    width: '100%',
+    alignItems: 'center',
+    gap: 20,
+  },
+
+  /* 중앙 은은한 가이드 수직 선 */
+  backgroundTrackLine: {
+    position: 'absolute',
+    top: 20,
+    bottom: 20,
+    left: '50%',
+    width: 3,
+    backgroundColor: 'rgba(51, 65, 85, 0.5)',
+    borderRadius: 2,
+    marginLeft: -1.5,
+  },
+
+  /* 기본 노드 버튼 (3D 입체감 & 입체 그림자) */
+  speakStyleNode: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1E293B',
+    paddingVertical: 16,
+    paddingHorizontal: 18,
+    borderRadius: 22,
+    minWidth: '64%',
+    maxWidth: '78%',
+    borderWidth: 1,
+    borderColor: '#334155',
+    // 3D 버튼 효과를 주는 입체 하단 테두리
+    borderBottomWidth: 4,
+    borderBottomColor: '#0F172A',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 5,
+  },
+
+  /* 첫 번째 노드 (ACTIVE STEP) 네온 글로우 테두리 */
+  activeFirstNode: {
+    backgroundColor: '#1E3A8A',
+    borderColor: '#60A5FA',
+    borderBottomColor: '#1D4ED8',
+    shadowColor: '#3B82F6',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.6,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+
+  /* 배지 스타일 */
+  nodeBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#334155',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  activeNodeBadge: {
+    backgroundColor: '#60A5FA',
+  },
+  nodeBadgeText: {
+    color: '#94A3B8',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  activeNodeBadgeText: {
+    color: '#0F172A',
+  },
+
+  /* 노드 텍스트 영역 */
+  nodeTextWrapper: {
+    flex: 1,
+    flexDirection: 'column',
+  },
+  speakNodeTopicText: {
+    color: '#E2E8F0',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  activeNodeTopicText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+  },
+
+  /* START 태그 */
+  startBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#2563EB',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    marginTop: 4,
+  },
+  startBadgeText: {
+    color: '#FFF',
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+
+  /* S자 정렬 커브 위치 */
+  nodeAlignLeft: {
+    alignSelf: 'flex-start',
+    marginLeft: '4%',
+  },
+  nodeAlignCenterLeft: {
+    alignSelf: 'flex-start',
+    marginLeft: '18%',
+  },
+  nodeAlignCenterRight: {
+    alignSelf: 'flex-end',
+    marginRight: '18%',
+  },
+  nodeAlignRight: {
+    alignSelf: 'flex-end',
+    marginRight: '4%',
+  },
+  learningHeader: {
+  position: 'absolute',
+  top: 52,
+  left: 20,
+  right: 20,
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  zIndex: 100,
+},
+
+learningHeaderBtn: {
+  width: 44,
+  height: 44,
+  borderRadius: 22,
+  backgroundColor: 'rgba(15, 23, 42, 0.7)',
+  justifyContent: 'center',
+  alignItems: 'center',
+
+  borderWidth: 1,
+  borderColor: 'rgba(255, 255, 255, 0.2)',
+
+  shadowColor: '#000',
+  shadowOffset: {
+    width: 0,
+    height: 2,
+  },
+  shadowOpacity: 0.3,
+  shadowRadius: 4,
+  elevation: 8,
+},
+wordPopupCard: {
+  position: 'absolute',
+  bottom: 105,
+  left: '8%',
+  right: '8%',
+
+  height: 105,
+
+  backgroundColor: '#FFFFFF',
+  borderRadius: 20,
+
+  paddingHorizontal: 22,
+
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+
+  shadowColor: '#000',
+  shadowOffset: {
+    width: 0,
+    height: 4,
+  },
+  shadowOpacity: 0.18,
+  shadowRadius: 8,
+
+  elevation: 8,
+
+  zIndex: 100,
+},
+wordSubTitle: {
+  fontSize: 11,
+  color: '#64748B',
+  fontWeight: '600',
+  marginBottom: 4,
+},
+
+wordText: {
+  fontSize: 24,
+  fontWeight: '800',
+  color: '#0F172A',
+},
+wordPopupActions: {
+  flexDirection: 'row',
+  alignItems: 'center',
+},
+topicPreviewContainer: {
+  position: 'absolute',
+  bottom: 42,
+  left: '7%',
+  right: '7%',
+
+  backgroundColor: 'rgba(255, 255, 255, 0.96)',
+  borderRadius: 22,
+
+  paddingHorizontal: 18,
+  paddingVertical: 16,
+  
+  shadowColor: '#000',
+  shadowOffset: {
+    width: 0,
+    height: 4,
+  },
+  shadowOpacity: 0.2,
+  shadowRadius: 8,
+  elevation: 8,
+
+  zIndex: 20,
+},
+topicHeaderRight: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 4,
+},
+
+topicPreviewHeader: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  marginBottom: 12,
+},
+
+topicPreviewTitleRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+},
+
+topicPreviewTitle: {
+  marginLeft: 7,
+  color: '#0F172A',
+  fontSize: 16,
+  fontWeight: '800',
+},
+
+topicViewAllBtn: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  paddingVertical: 4,
+},
+
+topicViewAllText: {
+  color: '#64748B',
+  fontSize: 12,
+  fontWeight: '600',
+},
+
+topicPreviewList: {
+  gap: 8,
+},
+
+topicPreviewItem: {
+  height: 48,
+
+  flexDirection: 'row',
+  alignItems: 'center',
+
+  backgroundColor: '#F8FAFC',
+  borderRadius: 12,
+
+  paddingHorizontal: 10,
+
+  borderWidth: 1,
+  borderColor: '#E2E8F0',
+},
+
+topicPreviewIcon: {
+  width: 32,
+  height: 32,
+  borderRadius: 16,
+
+  backgroundColor: '#EFF6FF',
+
+  justifyContent: 'center',
+  alignItems: 'center',
+
+  marginRight: 10,
+},
+
+topicPreviewText: {
+  flex: 1,
+
+  color: '#1E293B',
+  fontSize: 13,
+  fontWeight: '600',
+},
+recommendedWrapper: {
+  position: 'absolute',
+  left: 16,
+  right: 16,
+  bottom: 20,
+  backgroundColor: 'white',
+  borderRadius: 18,
+  overflow: 'hidden',
+
+  shadowColor: '#000',
+  shadowOffset: {
+    width: 0,
+    height: 2,
+  },
+  shadowOpacity: 0.15,
+  shadowRadius: 8,
+  elevation: 5,
+},
+
+recommendedHeader: {
+  height: 52,
+  paddingHorizontal: 18,
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+},
+
+recommendedHeaderText: {
+  fontSize: 15,
+  fontWeight: '700',
+  color: '#222',
+},
+
+recommendedArrow: {
+  fontSize: 20,
+  color: '#555',
+},
+
+recommendedContent: {
+  paddingHorizontal: 16,
+  paddingBottom: 14,
+  borderTopWidth: 1,
+  borderTopColor: '#f0f0f0',
+},
+
+topicItem: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  paddingVertical: 12,
+},
+
+topicEmoji: {
+  fontSize: 22,
+  width: 40,
+},
+
+topicTitle: {
+  fontSize: 14,
+  fontWeight: '600',
+  color: '#222',
+},
+
+topicDescription: {
+  marginTop: 3,
+  fontSize: 12,
+  color: '#888',
+},
+
+viewAllButton: {
+  alignItems: 'flex-end',
+  paddingTop: 4,
+},
+
+viewAllText: {
+  fontSize: 13,
+  fontWeight: '600',
+  color: '#3b82f6',
+},
 });

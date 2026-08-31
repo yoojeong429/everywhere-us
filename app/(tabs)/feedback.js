@@ -1,196 +1,404 @@
 import { Ionicons } from '@expo/vector-icons';
+import { router, useLocalSearchParams } from 'expo-router';
+import * as Speech from 'expo-speech';
 import { useState } from 'react';
 import {
-  Dimensions,
   SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
-  View
+  View,
 } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
 
-const { width } = Dimensions.get('window');
-
-// 💡 10개의 더미 데이터
-const DUMMY_FEEDBACKS = [
-  { id: '1', date: '2026.05.26', title: 'SPRING BLOOM', score: 85, summary: '상대방의 제안에 대해 완곡한 거절 표현을 적절히 사용했으나...', good: '정중한 톤앤매너', bad: '문법 부족', aiTip: '팁', themeColor: '#E57373', icon: 'flower-outline' },
-  { id: '2', date: '2026.05.24', title: 'SUMMER VACATION', score: 92, summary: 'Z세대의 트렌드 키워드를 활용한...', good: '어휘 활용', bad: '시제 오류', aiTip: '팁', themeColor: '#7952B3', icon: 'sunny-outline' },
-  { id: '3', date: '2026.05.20', title: 'THE RAINY DAY', score: 78, summary: '전반적인 흐름은 좋았으나...', good: '시각적 묘사', bad: '축약어 잦음', aiTip: '팁', themeColor: '#FBC02D', icon: 'rainy-outline' },
-  { id: '4', date: '2026.05.18', title: 'AUTUMN LEAVES', score: 88, summary: '비즈니스 협상 중...', good: '조건부 표현', bad: '성급한 결론', aiTip: '팁', themeColor: '#E67E22', icon: 'leaf-outline' },
-  { id: '5', date: '2026.05.15', title: 'WINTER BREEZE', score: 95, summary: '투자 유치를 위한...', good: '확장성 표현', bad: '단어 반복', aiTip: '팁', themeColor: '#5DADE2', icon: 'snow-outline' },
-  { id: '6', date: '2026.05.12', title: 'STARRY NIGHT', score: 81, summary: '아이디에이션...', good: '논리 확장', bad: '근거 부족', aiTip: '팁', themeColor: '#2C3E50', icon: 'moon-outline' },
-  { id: '7', date: '2026.05.09', title: 'FOREST WALK', score: 74, summary: '상황 대처 능력...', good: '당황하지 않음', bad: '감탄사 빈번', aiTip: '팁', themeColor: '#27AE60', icon: 'tree-outline' },
-  { id: '8', date: '2026.05.06', title: 'OCEAN DEEP', score: 90, summary: '글로벌 파트너...', good: '배려 섞인 거절', bad: '수동태 과도', aiTip: '팁', themeColor: '#2980B9', icon: 'boat-outline' },
-  { id: '9', date: '2026.05.02', title: 'SWEET BERRY', score: 86, summary: '신제품 런칭...', good: '매력적 형용사', bad: '빠른 속도', aiTip: '팁', themeColor: '#9B59B6', icon: 'ice-cream-outline' },
-  { id: '10', date: '2026.04.28', title: 'GOLDEN HOUR', score: 89, summary: '연봉 협상...', good: '자신감 있는 피력', bad: '소극적 어조', aiTip: '팁', themeColor: '#F39C12', icon: 'trophy-outline' },
+// 🧪 MOCK 데이터: 대화 세션 저장 결과 (점수 제거 버전)
+const MOCK_FEEDBACK_LIST = [
+  {
+    id: 'fb_1',
+    topic: '카페에서 음료 주문해보기',
+    space: 'CAFE',
+    date: '2026.05.18',
+    summary: '자연스러운 표현을 잘 사용하셨어요! 수량 표현에서 약간의 보완이 있으면 더 완벽합니다.',
+    dialogue: [
+      {
+        speaker: 'AI',
+        text: 'Hey Elie! What can I get started for you today?',
+        subText: '엘리! 오늘 어떤 음료로 준비해 드릴까요?',
+      },
+      {
+        speaker: 'USER',
+        text: 'I want one iced americano please.',
+        paraphrase: 'Can I please get a large iced Americano?',
+      },
+      {
+        speaker: 'AI',
+        text: 'Great! What size would you like for that?',
+        subText: '좋습니다! 사이즈는 어떤 걸로 하시겠어요?',
+      },
+      {
+        speaker: 'USER',
+        text: 'Large size, thank you.',
+        paraphrase: 'I would like a large one, thanks!',
+      },
+    ],
+    tips: [
+      "'I want ~' 대신 'Can I get ~'를 사용해보면 더 공손한 표현이 됩니다.",
+    ],
+  },
+  {
+    id: 'fb_2',
+    topic: '시그니처 메뉴 추천 부탁하기',
+    space: 'CAFE',
+    date: '2026.05.17',
+    summary: '질문 형태를 유연하게 잘 작성하셨습니다.',
+    dialogue: [
+      {
+        speaker: 'AI',
+        text: 'Welcome! Are you looking for anything specific?',
+        subText: '어서오세요! 특별히 찾으시는 메뉴가 있으신가요?',
+      },
+      {
+        speaker: 'USER',
+        text: 'What is your signature drink here?',
+        paraphrase: 'Could you recommend your signature drink?',
+      },
+    ],
+    tips: [
+      "'What do you recommend?'도 자주 쓰이는 좋은 추천 요청 표현입니다.",
+    ],
+  },
 ];
 
-const ROW_HEIGHT = 160; 
-const START_Y = 90; // 첫 번째 카드가 위치하는 Y축 중심점 계산
+// 🧪 MOCK 데이터: 대화 중 초록색 깃발을 눌러 보관함에 저장된 문장 목록
+const MOCK_SAVED_SENTENCES = [
+  {
+    id: 's_1',
+    topic: '카페에서 음료 주문해보기',
+    en: 'Hey Elie! What can I get started for you today?',
+    ko: '엘리! 오늘 어떤 음료로 준비해 드릴까요?',
+    savedAt: '2026.05.18',
+  },
+  {
+    id: 's_2',
+    topic: '카페에서 음료 주문해보기',
+    en: 'Great! What size would you like for that?',
+    ko: '좋습니다! 사이즈는 어떤 걸로 하시겠어요?',
+    savedAt: '2026.05.18',
+  },
+];
 
 export default function FeedbackScreen() {
-  const [selectedFeedback, setSelectedFeedback] = useState(null);
-  const [modalVisible, setModalVisible] = useState(false);
+  const [activeTab, setActiveTab] = useState('FEEDBACK'); // 'FEEDBACK' | 'SAVED'
+  const [expandedDialogueMap, setExpandedDialogueMap] = useState({}); // '전체대화복기 >' 토글
 
-  // 10개의 카드가 가진 정확한 중심 좌표(X, Y)를 관통하는 S자 곡선 생성 로직
-  const generateSvgPath = (numItems) => {
-    const leftX = width * 0.26;  // 좌측 카드의 중심 예상 지점
-    const rightX = width * 0.74; // 우측 카드의 중심 예상 지점
-    
-    let path = `M ${leftX} ${START_Y}`; // 시작점 세팅
-    
-    for (let i = 0; i < numItems - 1; i++) {
-      const currentY = START_Y + i * ROW_HEIGHT;
-      const nextY = currentY + ROW_HEIGHT;
-      const midY = (currentY + nextY) / 2;
+  // 💡 1. 전달받은 params 읽기
+  const params = useLocalSearchParams();
 
-      if (i % 2 === 0) {
-        // 좌측 카드 -> 우측 카드로 가는 완만한 곡선 패스
-        path += ` C ${width * 0.85} ${currentY + 20}, ${width * 0.85} ${nextY - 20}, ${rightX} ${nextY}`;
-      } else {
-        // 우측 카드 -> 좌측 카드로 가는 완만한 곡선 패스
-        path += ` C ${width * 0.15} ${currentY + 20}, ${width * 0.15} ${nextY - 20}, ${leftX} ${nextY}`;
+  // 💡 2. params로 전달받은 저장 문장 데이터 파싱 (없으면 MOCK 데이터 fallback)
+  const savedSentences = useMemo(() => {
+    if (params.savedData && typeof params.savedData === 'string') {
+      try {
+        return JSON.parse(params.savedData);
+      } catch (e) {
+        console.error('Failed to parse savedData', e);
       }
     }
-    return path;
+    return MOCK_SAVED_SENTENCES; // 파라미터가 없을 때 기존 MOCK 데이터 사용
+  }, [params.savedData]);
+
+  const handlePlayTTS = (text) => {
+    if (Speech) Speech.speak(text, { language: 'en-US' });
+  };
+
+  
+  const toggleDialogue = (id) => {
+    setExpandedDialogueMap((prev) => ({
+      ...prev,
+      [id]: !prev[id],
+    }));
   };
 
   return (
     <SafeAreaView style={styles.container}>
+      {/* 1. 상단 헤더 */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>피드백 로드맵</Text>
+        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+          <Ionicons name="chevron-back" size={26} color="#0f172a" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>학습 리포트 & 보관함</Text>
+        <View style={{ width: 32 }} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
-        
-        {/* 1. 배경 SVG 레이어 (수학적으로 정렬된 점선 도로) */}
-        <View style={styles.svgBackgroundAbsolute}>
-          <Svg width={width} height={ROW_HEIGHT * DUMMY_FEEDBACKS.length + START_Y}>
-            <Path
-              d={generateSvgPath(DUMMY_FEEDBACKS.length)}
-              fill="none"
-              stroke="#4E9E6B" /* 원작과 유사한 꽉 찬 초록 트랙색으로 변경 */
-              strokeWidth={32} /* 카드를 안정적으로 지탱하도록 두께 확장 */
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <Path
-              d={generateSvgPath(DUMMY_FEEDBACKS.length)}
-              fill="none"
-              stroke="#FFF"
-              strokeWidth={4}
-              strokeDasharray="8, 8" /* 중앙 흰색 점선 간격 최적화 */
-              strokeLinecap="round"
-            />
-          </Svg>
-        </View>
+      {/* 2. 상단 세그먼트 탭 */}
+      <View style={styles.tabContainer}>
+        <TouchableOpacity
+          style={[styles.tabButton, activeTab === 'FEEDBACK' && styles.activeTabButton]}
+          onPress={() => setActiveTab('FEEDBACK')}
+        >
+          <Text style={[styles.tabText, activeTab === 'FEEDBACK' && styles.activeTabText]}>
+            주제별 피드백
+          </Text>
+        </TouchableOpacity>
 
-        {/* 2. 전면 카드 레이어 */}
-        <View style={styles.cardsLayer}>
-          {DUMMY_FEEDBACKS.map((item, index) => {
-            const isRight = index % 2 !== 0;
-            return (
-              <View 
-                key={item.id} 
-                style={[
-                  styles.cardRowWrapper, 
-                  isRight ? { alignItems: 'flex-end' } : { alignItems: 'flex-start' }
-                ]}
-              >
-                <TouchableOpacity
-                  style={[styles.card, { borderBottomColor: item.themeColor }]}
-                  onPress={() => {
-                    setSelectedFeedback(item);
-                    setModalVisible(true);
-                  }}
-                >
-                  <View style={[styles.cardImageArea, { backgroundColor: item.themeColor + '15' }]}>
-                    <Ionicons name={item.icon} size={32} color={item.themeColor} />
-                    <View style={[styles.cardBadge, { backgroundColor: item.themeColor }]}>
-                      <Ionicons name="checkmark" size={12} color="#fff" />
+        <TouchableOpacity
+          style={[styles.tabButton, activeTab === 'SAVED' && styles.activeTabButton]}
+          onPress={() => setActiveTab('SAVED')}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <Ionicons name="flag" size={14} color={activeTab === 'SAVED' ? '#16a34a' : '#64748b'} />
+            <Text style={[styles.tabText, activeTab === 'SAVED' && styles.activeTabText]}>
+              문장 보관함
+            </Text>
+          </View>
+        </TouchableOpacity>
+      </View>
+
+      {/* 3. 콘텐츠 영역 */}
+      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+        {/* ---------------- A. 주제별 피드백 탭 ---------------- */}
+        {activeTab === 'FEEDBACK' && (
+          <View style={{ paddingBottom: 40 }}>
+            <Text style={styles.sectionHeaderTitle}>💡 카메라인식 대화 피드백</Text>
+
+            {MOCK_FEEDBACK_LIST.map((item) => {
+              const isDialogueExpanded = !!expandedDialogueMap[item.id];
+
+              return (
+                <View key={item.id} style={styles.feedbackCard}>
+                  {/* 카드 요약 헤더 (점수 요소 완전히 삭제) */}
+                  <View style={styles.cardHeader}>
+                    <View style={{ flex: 1 }}>
+                      <View style={styles.badgeRow}>
+                        <View style={styles.spaceBadge}>
+                          <Text style={styles.spaceBadgeText}>{item.space}</Text>
+                        </View>
+                        <Text style={styles.dateText}>{item.date}</Text>
+                      </View>
+                      <Text style={styles.topicTitle}>{item.topic}</Text>
                     </View>
                   </View>
-                  <View style={styles.cardContent}>
-                    <Text style={styles.cardTitle} numberOfLines={1}>{item.title}</Text>
+
+                  <View style={styles.divider} />
+
+                  {/* AI 종합 총평 */}
+                  <Text style={styles.detailSubTitle}>🤖 AI 종합 총평</Text>
+                  <Text style={styles.summaryText}>{item.summary}</Text>
+
+                  {/* 교정 팁 */}
+                  <Text style={styles.detailSubTitle}>✨ 더 매끄러운 표현 팁</Text>
+                  {item.tips.map((tip, idx) => (
+                    <Text key={idx} style={styles.tipText}>
+                      • {tip}
+                    </Text>
+                  ))}
+
+                  {/* 📌 전체대화복기 > 버튼 */}
+                  <TouchableOpacity
+                    style={styles.toggleDialogueBtn}
+                    activeOpacity={0.7}
+                    onPress={() => toggleDialogue(item.id)}
+                  >
+                    <Text style={styles.toggleDialogueText}>전체대화복기</Text>
+                    <Ionicons
+                      name={isDialogueExpanded ? 'chevron-up' : 'chevron-forward'}
+                      size={18}
+                      color="#2563eb"
+                    />
+                  </TouchableOpacity>
+
+                  {/* 누르면 펼쳐지는 대화 내역 및 패러프레이징 */}
+                  {isDialogueExpanded && (
+                    <View style={styles.dialogueBox}>
+                      {item.dialogue.map((d, idx) => {
+                        const isAI = d.speaker === 'AI';
+                        return (
+                          <View
+                            key={idx}
+                            style={[
+                              styles.chatBubbleContainer,
+                              isAI ? styles.aiBubbleContainer : styles.userBubbleContainer,
+                            ]}
+                          >
+                            <Text style={styles.speakerLabel}>{d.speaker}</Text>
+                            <View style={[styles.chatBubble, isAI ? styles.aiBubble : styles.userBubble]}>
+                              <Text style={[styles.dialogueText, !isAI && { color: '#FFFFFF' }]}>
+                                {d.text}
+                              </Text>
+                              {d.subText && (
+                                <Text style={styles.dialogueSubText}>{d.subText}</Text>
+                              )}
+                            </View>
+
+                            {!isAI && d.paraphrase && (
+                              <View style={styles.paraphraseCard}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                  <Ionicons name="sparkles" size={12} color="#16a34a" />
+                                  <Text style={styles.paraphraseTitle}>추천 패러프레이징</Text>
+                                </View>
+                                <Text style={styles.paraphraseText}>{d.paraphrase}</Text>
+                              </View>
+                            )}
+                          </View>
+                        );
+                      })}
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+          </View>
+        )}
+
+        {/* ---------------- B. 🚩 초록색 깃발 문장 보관함 탭 ---------------- */}
+        {activeTab === 'SAVED' && (
+        <View style={{ paddingBottom: 40 }}>
+          <Text style={styles.sectionHeaderTitle}>🚩 대화 중 저장한 문장</Text>
+
+          {/* 💡 MOCK_SAVED_SENTENCES 대신 동적 데이터(savedSentences) 사용 */}
+          {savedSentences.length > 0 ? (
+            savedSentences.map((item) => (
+              <View key={item.id} style={styles.savedSentenceCard}>
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                    <Ionicons name="flag" size={12} color="#16a34a" />
+                    <Text style={styles.savedTopicBadge}>#{item.topic || '자유 대화'}</Text>
                   </View>
+                  <Text style={styles.savedEnText}>{item.en}</Text>
+                  {item.ko ? <Text style={styles.savedKoText}>{item.ko}</Text> : null}
+                </View>
+
+                <TouchableOpacity
+                  style={styles.ttsButton}
+                  onPress={() => handlePlayTTS(item.en)}
+                >
+                  <Ionicons name="volume-medium" size={22} color="#16a34a" />
                 </TouchableOpacity>
               </View>
-            );
-          })}
+            ))
+          ) : (
+            <Text style={{ textAlign: 'center', marginTop: 40, color: '#94a3b8' }}>
+              저장된 문장이 없습니다.
+            </Text>
+          )}
         </View>
-
-        {/* 하단 최종 도달지 */}
-        <View style={styles.barnContainer}>
-          <Ionicons name="flag" size={32} color="#E74C3C" />
-          <Text style={styles.barnText}>GOAL IN</Text>
-        </View>
-
-      </ScrollView>
-
-      {/* 모달창 생략 (기존 로직과 완전히 동일) */}
-    </SafeAreaView>
-  );
+      )}
+    </ScrollView> 
+    </SafeAreaView>   
+  );                 
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#D2EBD4' },
-  header: { height: 56, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff', borderBottomWidth: 1, borderColor: '#E5E7EB' },
-  headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#111827' },
-  
-  scrollContainer: { paddingVertical: 20, position: 'relative' },
+  container: { flex: 1, backgroundColor: '#FFFFFF' }, // 화이트 배경
+  header: {
+    flexDirection: 'row',
+    justify: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 15,
+    paddingBottom: 15,
+  },
+  backBtn: { padding: 4 },
+  headerTitle: { color: '#0f172a', fontSize: 18, fontWeight: 'bold' },
 
-  // 수정된 부분: z-index -> zIndex
-  svgBackgroundAbsolute: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 1, 
+  tabContainer: {
+    flexDirection: 'row',
+    marginHorizontal: 20,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 12,
+    padding: 4,
+    marginBottom: 20,
   },
-  
-  cardsLayer: {
-    width: '100%',
-    paddingHorizontal: width * 0.04,
-    zIndex: 2, // 수정된 부분
+  tabButton: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderRadius: 8,
   },
-  cardRowWrapper: {
-    width: '100%',
-    height: ROW_HEIGHT,
-    justifyContent: 'center',
-  },
+  activeTabButton: { backgroundColor: '#FFFFFF', elevation: 2, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4 },
+  tabText: { color: '#64748b', fontSize: 14, fontWeight: '600' },
+  activeTabText: { color: '#0f172a', fontWeight: 'bold' },
 
-  card: {
-    width: '44%',
-    backgroundColor: '#fff',
+  content: { flex: 1, paddingHorizontal: 20 },
+  sectionHeaderTitle: { color: '#64748b', fontSize: 13, fontWeight: '600', marginBottom: 14 },
+
+  feedbackCard: {
+    backgroundColor: '#f8fafc',
     borderRadius: 16,
-    borderBottomWidth: 5,
-    shadowColor: '#1E462E',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    padding: 18,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
-  cardImageArea: {
-    height: 75,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    position: 'relative',
-  },
-  cardBadge: {
-    position: 'absolute',
-    top: 8,
-    right: -4,
-    width: 20,
-    height: 20,
-    borderRadius: 5,
-    borderBottomLeftRadius: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  cardContent: { padding: 10, alignItems: 'center', backgroundColor: '#fff', borderBottomLeftRadius: 16, borderBottomRightRadius: 16 },
-  cardTitle: { fontSize: 11, fontWeight: '800', color: '#555' },
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  badgeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  spaceBadge: { backgroundColor: '#2563eb', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
+  spaceBadgeText: { color: '#FFF', fontSize: 10, fontWeight: 'bold' },
+  dateText: { color: '#94a3b8', fontSize: 11 },
+  topicTitle: { color: '#0f172a', fontSize: 16, fontWeight: 'bold' },
 
-  barnContainer: { alignItems: 'center', marginTop: 20, marginBottom: 40, zIndex: 3 }, // 수정된 부분
-  barnText: { fontSize: 13, fontWeight: '900', color: '#4E9E6B', marginTop: 5 },
+  divider: { height: 1, backgroundColor: '#e2e8f0', marginVertical: 14 },
+  detailSubTitle: { color: '#2563eb', fontSize: 13, fontWeight: 'bold', marginTop: 10, marginBottom: 4 },
+  summaryText: { color: '#334155', fontSize: 14, lineHeight: 20 },
+  tipText: { color: '#475569', fontSize: 13, marginTop: 2, lineHeight: 18 },
+
+  toggleDialogueBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justify: 'space-between',
+    backgroundColor: '#eff6ff',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 10,
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+  },
+  toggleDialogueText: { color: '#2563eb', fontSize: 14, fontWeight: 'bold' },
+
+  dialogueBox: { backgroundColor: '#ffffff', padding: 12, borderRadius: 12, marginTop: 10, borderWidth: 1, borderColor: '#e2e8f0' },
+  chatBubbleContainer: { marginBottom: 14 },
+  aiBubbleContainer: { alignItems: 'flex-start' },
+  userBubbleContainer: { alignItems: 'flex-end' },
+  speakerLabel: { color: '#64748b', fontSize: 10, fontWeight: 'bold', marginBottom: 2 },
+  chatBubble: { padding: 10, borderRadius: 12, maxWidth: '85%' },
+  aiBubble: { backgroundColor: '#f1f5f9' },
+  userBubble: { backgroundColor: '#2563eb' },
+  dialogueText: { color: '#0f172a', fontSize: 13, fontWeight: '500' },
+  dialogueSubText: { color: '#64748b', fontSize: 11, marginTop: 2 },
+
+  paraphraseCard: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#bbf7d0',
+    borderWidth: 1,
+    padding: 8,
+    borderRadius: 8,
+    marginTop: 4,
+    maxWidth: '85%',
+  },
+  paraphraseTitle: { color: '#16a34a', fontSize: 11, fontWeight: 'bold' },
+  paraphraseText: { color: '#15803d', fontSize: 12, marginTop: 2 },
+
+  savedSentenceCard: {
+    backgroundColor: '#f8fafc',
+    padding: 16,
+    borderRadius: 14,
+    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justify: 'space-between',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  savedTopicBadge: { color: '#16a34a', fontSize: 12, fontWeight: '600' },
+  savedEnText: { color: '#0f172a', fontSize: 15, fontWeight: '600', marginBottom: 4 },
+  savedKoText: { color: '#64748b', fontSize: 12 },
+  ttsButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#f0fdf4',
+    justify: 'center',
+    alignItems: 'center',
+    marginLeft: 10,
+  },
 });
